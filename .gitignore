@@ -1,0 +1,87 @@
+# Windows
+desktop.ini
+Thumbs.db
+*.lnk
+
+# macOS
+.DS_Store
+
+# Cadence Xcelium
+xcelium.d/
+xrun.log
+xrun.history
+*.shm/
+*.dsn
+*.trn
+*.log
+*.key
+cds.lib
+hdl.var
+waves.shm/
+
+# Cadence JasperGold
+jgproject/
+*.jdb
+*.vdb
+
+# Cadence Genus
+genus_work/
+fv/
+*.syn.v
+*.syn.sdc
+reports/
+genus.log*
+genus.cmd*
+
+# Cadence Innovus
+innovus_work/
+innovus.log*
+innovus.cmd*
+*.enc
+*.enc.dat/
+
+# Yosys
+*.blif
+*.edif
+*.json.bak
+
+# OpenLane
+runs/
+openlane/runs/
+
+# GDS / LEF / DEF
+*.gds
+*.gds2
+*.lef
+*.def
+
+# Simulation
+*.vcd
+*.fsdb
+*.wlf
+*.vpd
+*.saif
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Build
+build/
+Build/
+*.o
+*.a
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Misc
+*.bak
+*.tmp
+*.orig
