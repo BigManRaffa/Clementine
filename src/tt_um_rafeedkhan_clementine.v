@@ -28,11 +28,11 @@ module tt_um_rafeedkhan_clementine (
   wire [3:0]  psign;
 
   clm_mac_multiply u_mul (
-    .a     (a),
-    .b     (b),
-    .prod  (prod),
-    .pexp  (pexp),
-    .psign (psign)
+    .a          (a),
+    .b          (b),
+    .prod_flat  (prod),
+    .pexp_flat  (pexp),
+    .psign      (psign)
   );
 
   wire [115:0] out_bus = {prod, pexp, psign};
