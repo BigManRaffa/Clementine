@@ -14,6 +14,16 @@ ifneq ($(GATES),yes)
 SIM_BUILD				= sim_build/rtl
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 
+# clm_wallace11.sv structurally instantiates SKY130 standard cells
+# (sky130_fd_sc_hd__fa_1 / ha_1 / and2_1 / inv_1), so RTL sim needs the PDK
+# cell models to elaborate. FUNCTIONAL selects the behavioral model and
+# UNIT_DELAY supplies the delay macro those models reference. USE_POWER_PINS
+# is intentionally left undefined so the cells elaborate without power ports.
+COMPILE_ARGS    += -DFUNCTIONAL
+COMPILE_ARGS    += -DUNIT_DELAY=\#1
+VERILOG_SOURCES += $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/primitives.v
+VERILOG_SOURCES += $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd.v
+
 else
 
 # Gate level simulation:
