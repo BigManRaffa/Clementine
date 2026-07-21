@@ -1,9 +1,9 @@
 # Tiny Tapeout project information
 project:
-  title:        ""      # Project title
-  author:       ""      # Your name
+  title:        "Clementine"      # Project title
+  author:       "Rafeed Khan"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  ""      # One line description of what your project does
+  description:  "4-lane FP16 SIMT GPU"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
 
@@ -25,34 +25,34 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  ui[0]: "A operand byte-serial input [0]"
+  ui[1]: "A operand byte-serial input [1]"
+  ui[2]: "A operand byte-serial input [2]"
+  ui[3]: "A operand byte-serial input [3]"
+  ui[4]: "A operand byte-serial input [4]"
+  ui[5]: "A operand byte-serial input [5]"
+  ui[6]: "A operand byte-serial input [6]"
+  ui[7]: "A operand byte-serial input [7]"
 
   # Outputs
-  uo[0]: ""
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "XOR-folded product/exponent/sign result [0]"
+  uo[1]: "XOR-folded product/exponent/sign result [1]"
+  uo[2]: "XOR-folded product/exponent/sign result [2]"
+  uo[3]: "XOR-folded product/exponent/sign result [3]"
+  uo[4]: "XOR-folded product/exponent/sign result [4]"
+  uo[5]: "XOR-folded product/exponent/sign result [5]"
+  uo[6]: "XOR-folded product/exponent/sign result [6]"
+  uo[7]: "XOR-folded product/exponent/sign result [7]"
 
   # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "B operand byte-serial input [0]"
+  uio[1]: "B operand byte-serial input [1]"
+  uio[2]: "B operand byte-serial input [2]"
+  uio[3]: "B operand byte-serial input [3]"
+  uio[4]: "B operand byte-serial input [4]"
+  uio[5]: "B operand byte-serial input [5]"
+  uio[6]: "B operand byte-serial input [6]"
+  uio[7]: "B operand byte-serial input [7]"
 
 # Do not change!
 yaml_version: 6
