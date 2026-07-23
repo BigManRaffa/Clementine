@@ -6,7 +6,17 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = tt_um_rafeedkhan_clementine.v clm_mac_multiply.sv clm_wallace11.sv
+PROJECT_SOURCES = tt_um_rafeedkhan_clementine.v \
+                  clm_spi_host.v \
+                  clm_fetch_seq.v \
+                  clm_decoder.v \
+                  clm_mask_stack.v \
+                  clm_lane.v \
+                  clm_regfile.v \
+                  clm_alu.v \
+                  clm_mult_bw.v \
+                  clm_fa.v \
+                  clm_ha.v
 
 ifneq ($(GATES),yes)
 

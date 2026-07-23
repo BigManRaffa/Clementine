@@ -3,7 +3,7 @@ project:
   title:        "Clementine"      # Project title
   author:       "Rafeed Khan"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "4-lane FP16 SIMT GPU"      # One line description of what your project does
+  description:  "4-lane int8 SIMT GPU"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
 
@@ -18,8 +18,16 @@ project:
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "tt_um_rafeedkhan_clementine.v"
-    - "clm_mac_multiply.sv"
-    - "clm_wallace11.sv"
+    - "clm_spi_host.v"
+    - "clm_fetch_seq.v"
+    - "clm_decoder.v"
+    - "clm_mask_stack.v"
+    - "clm_lane.v"
+    - "clm_regfile.v"
+    - "clm_alu.v"
+    - "clm_mult_bw.v"
+    - "clm_fa.v"
+    - "clm_ha.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
