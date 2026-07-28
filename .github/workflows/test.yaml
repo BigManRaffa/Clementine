@@ -3,10 +3,6 @@ on: [push, workflow_dispatch]
 jobs:
   test:
     runs-on: ubuntu-24.04
-    env:
-      # RTL sim needs the SKY130 cell models referenced in test/Makefile
-      # ($(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/*.v).
-      PDK_ROOT: ${{ github.workspace }}/pdk
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -26,13 +22,6 @@ jobs:
       - name: Install Python packages
         shell: bash
         run: pip install -r test/requirements.txt
-
-      - name: Install SKY130 PDK
-        shell: bash
-        run: |
-          pip install volare
-          # Enable the latest sky130 build into $PDK_ROOT (creates $PDK_ROOT/sky130A).
-          volare enable --pdk sky130 "$(volare ls-remote --pdk sky130 | head -n1)"
 
       - name: Run tests
         run: |
