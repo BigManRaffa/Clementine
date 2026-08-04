@@ -1,12 +1,12 @@
 `default_nettype none
 
 module clm_mult_bw (
-    input  wire signed [7:0] a,
-    input  wire signed [7:0] b,
+    input wire signed [7:0] a,
+    input wire signed [7:0] b,
     output wire signed [15:0] product
 );
 
-    localparam integer op_width   = 8;
+    localparam integer op_width = 8;
     localparam integer prod_width = op_width * 2;
     localparam integer sign_index = op_width - 1;
 
@@ -44,11 +44,11 @@ module clm_mult_bw (
     wire correction_lo_a;
     wire correction_lo_b;
 
-    assign correction_top  = 1'b1;
+    assign correction_top = 1'b1;
     assign correction_hi_a = ~a[sign_index];
     assign correction_hi_b = ~b[sign_index];
-    assign correction_lo_a =  a[sign_index];
-    assign correction_lo_b =  b[sign_index];
+    assign correction_lo_a = a[sign_index];
+    assign correction_lo_b = b[sign_index];
 
     // you can rewrite the 5 correction bits using two control signals 
     // a[7]+b[7] = (a[7] ^ b[7]) + 2(a[7] & b[7]), which gives XOR*2^7 + AND*2^8
@@ -321,9 +321,9 @@ module clm_mult_bw (
 
 
     // upper half correction
-    assign product[14]  = rca_sum14 ^ correction_xor;
+    assign product[14] = rca_sum14 ^ correction_xor;
     assign rca_borrow15 = (~rca_sum14) & correction_xor;
-    assign product[15]  = rca_carry14 ^ rca_borrow15 ^ correction_and;
+    assign product[15] = rca_carry14 ^ rca_borrow15 ^ correction_and;
 
     // correction_hi_a, correction_hi_b and correction_top are absorbed into
     // the identity above and have no separate gate of their own
