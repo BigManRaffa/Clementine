@@ -40,6 +40,7 @@ module clm_lane (
 
     output wire predicate_out,
     output wire predicate_write_qualified
+    output wire [15:0] accumulator_value
 );
 
     wire lane_commit;
@@ -114,7 +115,8 @@ module clm_lane (
         .ldac_select_highway_right (ldac_select_highway_right),
         .writeback_select (writeback_select),
         .writeback_bus (writeback_bus),
-        .predicate_out (predicate_out)
+        .predicate_out (predicate_out),
+        .accumulator_value (accumulator_value)
     );
 
 endmodule

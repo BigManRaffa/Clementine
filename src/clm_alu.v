@@ -32,7 +32,8 @@ module clm_alu (
     input wire [1:0] writeback_select,
 
     output wire [7:0] writeback_bus,
-    output wire predicate_out
+    output wire predicate_out,
+    output wire [15:0] accumulator_value
 );
 
     wire [7:0] box1_source;
@@ -184,6 +185,8 @@ module clm_alu (
 
     wire [7:0] mvac_byte;
     assign mvac_byte = accumulator_half_select ? accumulator[15:8] : accumulator[7:0];
+
+    assign accumulator_value = accumulator;
 
     // why does switching from a one-hot merge to a 2:1 writeback selector save me 50 cells
     wire [7:0] writeback_pair_low;
