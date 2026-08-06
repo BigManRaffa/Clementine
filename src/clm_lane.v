@@ -39,8 +39,8 @@ module clm_lane (
     input wire lane_active,
 
     output wire predicate_out,
-    output wire predicate_write_qualified
-    output wire [15:0] accumulator_value,
+    output wire predicate_write_qualified,
+    output wire [15:0] accumulator_value
 );
 
     wire lane_commit;
