@@ -32,19 +32,19 @@ module clm_spi_host (
     localparam TRANSACTION_END = 5'd18;
 
     // edges read from the settled stages
-    reg [1:0] sclk_sync;
-    reg [1:0] cs_n_sync;
+    reg [2:0] sclk_sync;
+    reg [2:0] cs_n_sync;
     reg [1:0] mosi_sync;
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            sclk_sync <= 2'b00;
-            cs_n_sync <= 2'b11;
+            sclk_sync <= 3'b000;
+            cs_n_sync <= 3'b111;
             mosi_sync <= 2'b00;
         end
         else begin
-            sclk_sync <= {sclk_sync[0], spi_sclk};
-            cs_n_sync <= {cs_n_sync[0], spi_cs_n};
+            sclk_sync <= {sclk_sync[1:0], spi_sclk};
+            cs_n_sync <= {cs_n_sync[1:0], spi_cs_n};
             mosi_sync <= {mosi_sync[0], spi_mosi};
         end
     end
@@ -54,10 +54,10 @@ module clm_spi_host (
     wire cs_active;
     wire cs_falling;
 
-    assign sclk_rising = sclk_sync[0] & (~sclk_sync[1]);
-    assign sclk_falling = (~sclk_sync[0]) & sclk_sync[1];
-    assign cs_active = ~cs_n_sync[0];
-    assign cs_falling = (~cs_n_sync[0]) & cs_n_sync[1];
+    assign sclk_rising = sclk_sync[1] & (~sclk_sync[2]);
+    assign sclk_falling = (~sclk_sync[1]) & sclk_sync[2];
+    assign cs_active = ~cs_n_sync[1];
+    assign cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
 
     // counter walks 0-18 across one cs. 0-2 command, 3-18 data
     reg [4:0] transaction_counter;
@@ -123,8 +123,7 @@ module clm_spi_host (
     assign lane_pair_high = command_register[0] ? lane3_accumulator : lane2_accumulator;
     assign lane_selected = command_register[1] ? lane_pair_high : lane_pair_low;
 
-    assign response_value[6:0] = command_is_accumulator_read ? lane_selected[6:0] : status_word[6:0];
-    assign response_value[15:7] = lane_selected[15:7] & {9{command_is_accumulator_read}};
+    assign response_value = command_is_accumulator_read ? lane_selected : status_word;
 
     // one register both directions, parallel loaded on a read, shifted through on a load
     reg [15:0] data_register;
