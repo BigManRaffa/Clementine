@@ -5,6 +5,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge, Timer
+from cocotb.handle import Force, Release
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +188,8 @@ def exact_kernel(words: Sequence[int]) -> List[int]:
 
 
 async def start_clock(dut, period_ns: int = 20):
-    cocotb.start_soon(Clock(dut.clk, period_ns, units="ns").start())
-    await Timer(1, units="ns")
+    cocotb.start_soon(Clock(dut.clk, period_ns, unit="ns").start())
+    await Timer(1, unit="ns")
 
 
 async def active_low_reset(dut, cycles: int = 4):
@@ -199,7 +200,7 @@ async def active_low_reset(dut, cycles: int = 4):
 
 
 async def settle(ns: int = 1):
-    await Timer(ns, units="ns")
+    await Timer(ns, unit="ns")
 
 
 def value_is_resolvable(sig) -> bool:
@@ -310,7 +311,7 @@ class SpiMaster:
         self.set_mosi(0)
         self.set_cs(1)
         if phase_offset_ns:
-            await Timer(phase_offset_ns, units="ns")
+            await Timer(phase_offset_ns, unit="ns")
 
         self.set_cs(0)
         # Let the three-stage CS synchronizer observe a clean falling edge.
@@ -326,21 +327,21 @@ class SpiMaster:
         for i, out_bit in enumerate(bits):
             # Mode 0: data becomes stable while SCLK is low.
             self.set_mosi(out_bit)
-            await Timer(half_ns, units="ns")
+            await Timer(half_ns, unit="ns")
             self.set_sclk(1)
-            await Timer(sample_delay, units="ns")
+            await Timer(sample_delay, unit="ns")
 
             # The first three returned bits are command-phase don't-cares.
             if i >= 3:
                 rx_bits.append(self.get_miso())
 
             if high_remainder > 0:
-                await Timer(high_remainder, units="ns")
+                await Timer(high_remainder, unit="ns")
             self.set_sclk(0)
 
         # A proper frame keeps CS low through the final falling edge and gives
         # the core-domain edge detector time to consume the final rising edge.
-        await Timer(half_ns, units="ns")
+        await Timer(half_ns, unit="ns")
         self.set_cs(1)
         self.set_mosi(0)
         await ClockCycles(self.dut.clk, 5)
@@ -367,14 +368,14 @@ class SpiMaster:
         self.set_mosi(0)
         self.set_cs(1)
         if phase_offset_ns:
-            await Timer(phase_offset_ns, units="ns")
+            await Timer(phase_offset_ns, unit="ns")
         self.set_cs(0)
         await ClockCycles(self.dut.clk, 4)
         for n in (2, 1, 0):
             self.set_mosi((command >> n) & 1)
-            await Timer(half_ns, units="ns")
+            await Timer(half_ns, unit="ns")
             self.set_sclk(1)
-            await Timer(half_ns, units="ns")
+            await Timer(half_ns, unit="ns")
             self.set_sclk(0)
         # Give the synchronized falling edge after command bit 0 time to become
         # at_phase_boundary, then abort the nominal data phase.
@@ -399,11 +400,11 @@ class SpiMaster:
         stream = [0, 0, 0] + [int(x) & 1 for x in data_bits]
         for b in stream:
             self.set_mosi(b)
-            await Timer(half_ns, units="ns")
+            await Timer(half_ns, unit="ns")
             self.set_sclk(1)
-            await Timer(half_ns, units="ns")
+            await Timer(half_ns, unit="ns")
             self.set_sclk(0)
-        await Timer(half_ns, units="ns")
+        await Timer(half_ns, unit="ns")
         self.set_cs(1)
         await ClockCycles(self.dut.clk, 6)
 
@@ -520,53 +521,200 @@ async def monitor_top_run(dut, timeout_cycles: int = 256) -> RunStats:
     raise AssertionError(f"run did not return to HALT within {timeout_cycles} core cycles")
 
 # ---------------------------------------------------------------------------
-# Single-file target dispatch
+# Single-TOPLEVEL hierarchy harness
+# ---------------------------------------------------------------------------
+#
+# TinyTapeout always compiles tb.v as TOPLEVEL=tb.  tb.v stays UNCHANGED.
+# Exhaustive tests therefore operate on the REAL production submodules already
+# instantiated beneath tb.tt_um_bigmanraffa_clm.  Python temporarily forces only
+# the INPUT ports of the target child; its outputs/state/logic are untouched.
+# Every force is released after the test.  Full-chip tests do not force anything.
 # ---------------------------------------------------------------------------
 
 
-def _sim_top_name(dut) -> str:
-    """Best-effort simulator root name used only to dispatch unit suites."""
-    name = getattr(dut, "_name", "")
-    if name:
-        return str(name)
-    path = getattr(dut, "_path", "")
-    if path:
-        return str(path).split(".")[0]
-    return ""
+class _ForcedSignal:
+    def __init__(self, handle, forced_registry):
+        self._handle = handle
+        self._forced_registry = forced_registry
+
+    @property
+    def value(self):
+        return self._handle.value
+
+    @value.setter
+    def value(self, new_value):
+        self._handle.value = Force(new_value)
+        self._forced_registry[id(self._handle)] = self._handle
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
 
 
-def _target_matches(dut, target: str) -> bool:
-    name = _sim_top_name(dut)
-    if target == "tb":
-        # Permit running the integration suite either through TinyTapeout's
-        # standard wrapper or directly against the production top for debug.
-        return name in {"tb", "tt_um_bigmanraffa_clm"}
-    return name == target
+class _HierarchyDut:
+    def __init__(self, root, target, force_inputs, forced_registry):
+        self._root = root
+        self._target = target
+        self._force_inputs = set(force_inputs)
+        self._forced_registry = forced_registry
+
+    def __getattr__(self, name):
+        if name == "clk":
+            return self._root.clk
+        if name == "rst_n":
+            return self._root.rst_n
+
+        handle = getattr(self._target, name)
+        if name in self._force_inputs:
+            return _ForcedSignal(handle, self._forced_registry)
+        return handle
 
 
-def for_top(target: str):
-    """Register a Cocotb test that becomes a no-op for unrelated TOPLEVELs.
+def _core(root):
+    return root.tt_um_bigmanraffa_clm
 
-    Keeping the unit suites in one Python file does not change what they test:
-    decoder tests still run with clm_decoder as TOPLEVEL, regfile tests with
-    clm_regfile as TOPLEVEL, and so on.  The final integration tests run with
-    the standard TinyTapeout tb wrapper.
+
+def _resolve_path(handle, dotted_path):
+    for piece in dotted_path.split("."):
+        handle = getattr(handle, piece)
+    return handle
+
+
+_HIER_TARGETS = {
+    "clm_decoder": (
+        "decoder",
+        {"current_instruction", "replay_state"},
+    ),
+    "clm_regfile": (
+        "lane0.lane_regfile",
+        {
+            "write_enable", "write_address", "write_data",
+            "read_row_even", "read_row_odd",
+        },
+    ),
+    "clm_mask_stack": (
+        "mask_stack",
+        {
+            "predicate_out", "predicate_write_qualified",
+            "command_ifp", "command_else", "command_reconverge_pop",
+            "target_address",
+        },
+    ),
+    "clm_fetch_seq": (
+        "fetch_seq",
+        {
+            "go",
+            "instruction_shift_enable", "instruction_shift_data",
+            "rs_address", "rt_address", "bank_conflict", "is_halt",
+            "any_lane_active",
+            "stack_top_valid", "stack_top_type", "stack_top_target",
+        },
+    ),
+    "clm_mult_bw": (
+        "lane0.lane_alu.engine_multiplier",
+        {"a", "b"},
+    ),
+    "clm_alu": (
+        "lane0.lane_alu",
+        {
+            "highway_left", "highway_right", "immediate_value",
+            "select_immediate", "force_one_box1", "force_one_box2",
+            "swap_operands", "subtract_prepare", "prepare_zero",
+            "select_accumulator",
+            "shift_direction", "bitwise_select", "condition_select",
+            "accumulator_clear", "accumulator_load",
+            "accumulator_mac_capture", "accumulator_half_select",
+            "ldac_select_highway_right", "writeback_select",
+            "writeback_enable_arithmetic", "writeback_enable_shift",
+            "writeback_enable_bitwise", "writeback_enable_mvac",
+        },
+    ),
+    "clm_lane": (
+        "lane0",
+        {
+            "read_row_even", "read_row_odd", "conflict_bank_select",
+            "rd_address", "immediate_value",
+            "operand_hold_load", "operand_hold_use",
+            "instruction_commit", "register_write_enable",
+            "predicate_write_enable",
+            "select_immediate", "force_one_box1", "force_one_box2",
+            "swap_operands", "laneid_mode",
+            "subtract_prepare", "prepare_zero", "select_accumulator",
+            "shift_direction", "bitwise_select", "condition_select",
+            "accumulator_clear", "accumulator_load",
+            "accumulator_mac_capture", "accumulator_half_select",
+            "ldac_select_highway_right", "writeback_select",
+            "lane_active",
+        },
+    ),
+    "clm_spi_host": (
+        "spi_host",
+        {
+            "spi_sclk", "spi_mosi", "spi_cs_n",
+            "sequencer_done",
+            "lane0_accumulator", "lane1_accumulator",
+            "lane2_accumulator", "lane3_accumulator",
+        },
+    ),
+}
+
+
+def _release_forces(forced_registry):
+    for handle in list(forced_registry.values()):
+        try:
+            handle.value = Release()
+        except Exception:
+            pass
+    forced_registry.clear()
+
+
+def hierarchy_test(target_name):
+    """Run a real child-module test under the one fixed TinyTapeout tb.
+
+    This never silently returns.  Missing hierarchy is a hard failure, so a
+    reported PASS always means the test body actually executed.
     """
+    if target_name not in _HIER_TARGETS:
+        raise ValueError("unknown hierarchy target: " + target_name)
+
     def decorate(fn):
-        async def guarded(dut, *args, **kwargs):
-            if not _target_matches(dut, target):
-                return
-            return await fn(dut, *args, **kwargs)
+        async def guarded(root, *args, **kwargs):
+            root.ena.value = 1
+            root.ui_in.value = 0
+            root.uio_in.value = 0b00000001  # CS high, SCLK/MOSI low
+            root.rst_n.value = 1
+
+            path, force_inputs = _HIER_TARGETS[target_name]
+            try:
+                target = _resolve_path(_core(root), path)
+            except Exception as exc:
+                raise AssertionError(
+                    "Required production hierarchy is missing: "
+                    + "tb.tt_um_bigmanraffa_clm." + path
+                ) from exc
+
+            forced_registry = {}
+            unit = _HierarchyDut(
+                root=root,
+                target=target,
+                force_inputs=force_inputs,
+                forced_registry=forced_registry,
+            )
+            try:
+                return await fn(unit, *args, **kwargs)
+            finally:
+                _release_forces(forced_registry)
+                root.uio_in.value = 0b00000001
 
         guarded.__name__ = fn.__name__
+        guarded.__qualname__ = fn.__name__
         guarded.__doc__ = fn.__doc__
         return cocotb.test()(guarded)
+
     return decorate
 
 
-
 # ===========================================================================
-# TEST_DECODER  (TOPLEVEL=clm_decoder)
+# TEST_DECODER  (REAL HIERARCHY: core.decoder)
 # ===========================================================================
 
 decoder_DONTCARE = object()
@@ -724,14 +872,14 @@ def decoder_check_signal(dut, name: str, expected, instr: int, replay: int):
         )
 
 
-@for_top("clm_decoder")
+@hierarchy_test("clm_decoder")
 async def exhaustive_all_instructions_and_replay_states(dut):
     """Exhaust all 65,536 instruction words in both replay states."""
     for replay in (0, 1):
         dut.replay_state.value = replay
         for instr in range(1 << 16):
             dut.current_instruction.value = instr
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             exp = decoder_expected_decoder(instr, replay)
             for name, expected in exp.items():
                 decoder_check_signal(dut, name, expected, instr, replay)
@@ -755,7 +903,7 @@ async def exhaustive_all_instructions_and_replay_states(dut):
                 raise AssertionError(f"register and predicate writes both enabled at 0x{instr:04X}")
 
 
-@for_top("clm_decoder")
+@hierarchy_test("clm_decoder")
 async def exhaustive_bank_conflict_truth_table(dut):
     """16 opcodes x 8 rs x 8 rt, including R0 and rs==rt corner cases."""
     dut.replay_state.value = 0
@@ -765,7 +913,7 @@ async def exhaustive_bank_conflict_truth_table(dut):
             for rt in range(8):
                 instr = (op << 12) | (rs << 6) | (rt << 3)
                 dut.current_instruction.value = instr
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 exp = int(op in two_source and ((rs & 1) == (rt & 1)))
                 got = int(dut.bank_conflict.value)
                 assert got == exp, (
@@ -773,7 +921,7 @@ async def exhaustive_bank_conflict_truth_table(dut):
                 )
 
 
-@for_top("clm_decoder")
+@hierarchy_test("clm_decoder")
 async def format_independence_overlap_hunt(dut):
     """Sweep undefined/overlapped bits and prove architectural fields stay independent."""
     dut.replay_state.value = 0
@@ -785,7 +933,7 @@ async def format_independence_overlap_hunt(dut):
             snapshots = []
             for bit0 in (0, 1):
                 dut.current_instruction.value = base | bit0
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 snapshots.append((
                     int(dut.rd_address.value), int(dut.immediate_value.value),
                     int(dut.select_immediate.value), int(dut.force_one_box2.value),
@@ -805,7 +953,7 @@ async def format_independence_overlap_hunt(dut):
                         instr = ((OP_SHIFT << 12) | (rd << 9) | (rs << 6) |
                                  (rt << 3) | (junk << 1) | direction)
                         dut.current_instruction.value = instr
-                        await Timer(1, units="ns")
+                        await Timer(1, unit="ns")
                         snap = (
                             int(dut.rd_address.value), int(dut.rs_address.value), int(dut.rt_address.value),
                             int(dut.shift_direction.value), int(dut.writeback_select.value),
@@ -828,7 +976,7 @@ async def format_independence_overlap_hunt(dut):
                     instr = ((OP_CMP << 12) | (cond << 10) | (bit9 << 9) |
                              (rs << 6) | (rt << 3))
                     dut.current_instruction.value = instr
-                    await Timer(1, units="ns")
+                    await Timer(1, unit="ns")
                     snaps.append((
                         int(dut.condition_select.value), int(dut.rs_address.value), int(dut.rt_address.value),
                         int(dut.predicate_write_enable.value), int(dut.register_write_enable.value),
@@ -842,7 +990,7 @@ async def format_independence_overlap_hunt(dut):
         for target in range(16):
             instr = (OP_IFP_ELSE << 12) | (subop << 4) | target
             dut.current_instruction.value = instr
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             assert int(dut.mask_target.value) == target
             assert int(dut.command_ifp.value) == (1 - subop)
             assert int(dut.command_else.value) == subop
@@ -853,7 +1001,7 @@ async def format_independence_overlap_hunt(dut):
         for high in (0, 1):
             instr = (OP_LDAC << 12) | (rs << 6) | (high << 3)
             dut.current_instruction.value = instr
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             assert int(dut.accumulator_half_select.value) == high
             assert int(dut.accumulator_load.value) == 1
             assert int(dut.ldac_select_highway_right.value) == (rs & 1)
@@ -870,7 +1018,7 @@ async def format_independence_overlap_hunt(dut):
                 base = (OP_MOV << 12) | (rd << 9) | (rs << 6) | (junk_5_1 << 1)
 
                 dut.current_instruction.value = base  # bit0=0 => MOV
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 assert int(dut.laneid_mode.value) == 0
                 assert int(dut.rs_address.value) == rs
                 assert int(dut.bank_conflict.value) == 0
@@ -879,7 +1027,7 @@ async def format_independence_overlap_hunt(dut):
                 assert int(dut.swap_operands.value) == 0
 
                 dut.current_instruction.value = base | 1  # bit0=1 => LANEID
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 assert int(dut.laneid_mode.value) == 1
                 assert int(dut.rs_address.value) == rs  # field may wiggle; meaning may not
                 assert int(dut.bank_conflict.value) == 0
@@ -889,17 +1037,17 @@ async def format_independence_overlap_hunt(dut):
 
 
 # ===========================================================================
-# TEST_REGFILE  (TOPLEVEL=clm_regfile)
+# TEST_REGFILE  (REAL HIERARCHY: core.lane0.lane_regfile)
 # ===========================================================================
 
 async def regfile_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").regfile_start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.write_enable.value = 0
     dut.write_address.value = 0
     dut.write_data.value = 0
     dut.read_row_even.value = 0
     dut.read_row_odd.value = 0
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def regfile_write_reg(dut, addr: int, value: int):
@@ -908,7 +1056,7 @@ async def regfile_write_reg(dut, addr: int, value: int):
     dut.write_enable.value = 1
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     dut.write_enable.value = 0
 
 
@@ -916,10 +1064,10 @@ async def regfile_read_reg(dut, addr: int) -> int:
     row = (addr >> 1) & 0x3
     if addr & 1:
         dut.read_row_odd.value = row
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         return int(dut.read_data_odd.value)
     dut.read_row_even.value = row
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     return int(dut.read_data_even.value)
 
 
@@ -927,7 +1075,7 @@ async def regfile_snapshot(dut):
     return [await regfile_read_reg(dut, i) for i in range(8)]
 
 
-@for_top("clm_regfile")
+@hierarchy_test("clm_regfile")
 async def register_file_exhaustive_architectural_behavior(dut):
     await regfile_start(dut)
 
@@ -984,7 +1132,7 @@ async def register_file_exhaustive_architectural_behavior(dut):
     dut.write_data.value = 0x56
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     dut.write_enable.value = 0
     assert await regfile_read_reg(dut, 3) == 0x34
     assert await regfile_read_reg(dut, 4) == 0x56
@@ -1000,7 +1148,7 @@ async def register_file_exhaustive_architectural_behavior(dut):
         for orow in range(4):
             dut.read_row_even.value = erow
             dut.read_row_odd.value = orow
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             assert int(dut.read_data_even.value) == expected_even[erow]
             assert int(dut.read_data_odd.value) == expected_odd[orow]
 
@@ -1008,11 +1156,11 @@ async def register_file_exhaustive_architectural_behavior(dut):
     dut.write_enable.value = 0
     for erow in range(4):
         dut.read_row_even.value = erow
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert int(dut.read_data_even.value) == expected_even[erow]
     for orow in range(4):
         dut.read_row_odd.value = orow
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert int(dut.read_data_odd.value) == expected_odd[orow]
 
     # Write-to-read timing: before the active edge the old register is visible;
@@ -1023,12 +1171,12 @@ async def register_file_exhaustive_architectural_behavior(dut):
     dut.write_address.value = 5
     dut.write_data.value = 0xA5
     dut.write_enable.value = 1
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
     assert int(dut.read_data_odd.value) == 0x5A
     await RisingEdge(dut.clk)
     await ReadOnly()
     assert int(dut.read_data_odd.value) == 0xA5
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     dut.write_enable.value = 0
 
     # Data-integrity patterns through every register.
@@ -1067,23 +1215,23 @@ async def register_file_exhaustive_architectural_behavior(dut):
     dut.write_enable.value = 1
     dut.write_address.value = 2
     dut.write_data.value = 0xBC
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
     assert int(dut.read_data_odd.value) == 0x19
     assert int(dut.read_data_even.value) == 0x2A
     await RisingEdge(dut.clk)
     await ReadOnly()
     assert int(dut.read_data_odd.value) == 0x19
     assert int(dut.read_data_even.value) == 0xBC
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     dut.write_enable.value = 0
 
 
 # ===========================================================================
-# TEST_MASK_STACK  (TOPLEVEL=clm_mask_stack)
+# TEST_MASK_STACK  (REAL HIERARCHY: core.mask_stack)
 # ===========================================================================
 
 async def mask_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").mask_start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.rst_n.value = 0
     dut.predicate_out.value = 0
     dut.predicate_write_qualified.value = 0
@@ -1096,13 +1244,13 @@ async def mask_start(dut):
     dut.rst_n.value = 1
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def mask_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def mask_capture_predicate(dut, value: int, qual: int = 0xF):
@@ -1139,7 +1287,7 @@ def mask_maybe_internal(dut, name: str):
         return None
 
 
-@for_top("clm_mask_stack")
+@hierarchy_test("clm_mask_stack")
 async def reset_predicate_capture_and_atomic_commands(dut):
     await mask_start(dut)
 
@@ -1185,14 +1333,14 @@ async def reset_predicate_capture_and_atomic_commands(dut):
     assert int(dut.lane_active.value) == 0xF
 
 
-@for_top("clm_mask_stack")
+@hierarchy_test("clm_mask_stack")
 async def exhaustive_ifp_partition_and_roundtrip(dut):
     """All parent masks x all predicates, using legal IFP->ELSE->POP flow."""
     # The module has no direct SETMASK operation, so construct each parent mask
     # by first splitting all lanes and selecting the desired true subset, then
     # perform the test split underneath it.  Reset between cases keeps the
     # construction unambiguous and also pounds reset semantics.
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").mask_start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
 
     for parent in range(16):
         for pred in range(16):
@@ -1205,7 +1353,7 @@ async def exhaustive_ifp_partition_and_roundtrip(dut):
             dut.rst_n.value = 1
             await RisingEdge(dut.clk)
             await ReadOnly()
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
 
             # Build parent mask as the true side of an outer IFP.
             dut.predicate_out.value = parent
@@ -1263,7 +1411,7 @@ async def exhaustive_ifp_partition_and_roundtrip(dut):
             assert int(dut.stack_top_target.value) == 0xE
 
 
-@for_top("clm_mask_stack")
+@hierarchy_test("clm_mask_stack")
 async def nesting_depth_priority_exports_and_illegal_overflow_behavior(dut):
     await mask_start(dut)
 
@@ -1360,7 +1508,7 @@ async def nesting_depth_priority_exports_and_illegal_overflow_behavior(dut):
     assert int(dut.stack_top_valid.value) == 0
 
 
-@for_top("clm_mask_stack")
+@hierarchy_test("clm_mask_stack")
 async def commands_work_even_with_zero_active_mask(dut):
     await mask_start(dut)
 
@@ -1381,13 +1529,13 @@ async def commands_work_even_with_zero_active_mask(dut):
 
 
 # ===========================================================================
-# TEST_FETCH_SEQ  (TOPLEVEL=clm_fetch_seq)
+# TEST_FETCH_SEQ  (REAL HIERARCHY: core.fetch_seq)
 # ===========================================================================
 
 async def fetch_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").fetch_start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.rst_n.value = 0
-    dut.fetch_go.value = 0
+    dut.go.value = 0
     dut.instruction_shift_enable.value = 0
     dut.instruction_shift_data.value = 0
     dut.rs_address.value = 0
@@ -1403,13 +1551,13 @@ async def fetch_start(dut):
     dut.rst_n.value = 1
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def fetch_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def fetch_upload_word(dut, word: int):
@@ -1423,14 +1571,14 @@ async def fetch_upload_image(dut, words):
     assert len(words) == 16
     for w in words:
         await fetch_upload_word(dut, w)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def fetch_go(dut):
-    dut.fetch_go.value = 1
+    dut.go.value = 1
     await fetch_edge(dut)
-    dut.fetch_go.value = 0
-    await Timer(1, units="ns")
+    dut.go.value = 0
+    await Timer(1, unit="ns")
 
 
 def fetch_pc(dut):
@@ -1440,7 +1588,7 @@ def fetch_pc(dut):
         return None
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def reset_upload_order_and_warm_restart_contract(dut):
     await fetch_start(dut)
     assert int(dut.done.value) == 1
@@ -1490,7 +1638,7 @@ async def reset_upload_order_and_warm_restart_contract(dut):
     assert int(dut.done.value) == 0
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def normal_commit_and_bank_conflict_capture_replay(dut):
     await fetch_start(dut)
     words = [0x2000 + i for i in range(15)] + [0xF000]
@@ -1553,7 +1701,7 @@ async def normal_commit_and_bank_conflict_capture_replay(dut):
         assert int(dut.replay_state.value) == 0
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def exhaustive_read_row_routing_normal_and_replay(dut):
     await fetch_start(dut)
 
@@ -1562,7 +1710,7 @@ async def exhaustive_read_row_routing_normal_and_replay(dut):
         for rt in range(8):
             dut.rs_address.value = rs
             dut.rt_address.value = rt
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             expected_even = (rt >> 1) & 3 if (rs & 1) else (rs >> 1) & 3
             expected_odd = (rs >> 1) & 3 if (rs & 1) else (rt >> 1) & 3
             assert int(dut.read_row_even.value) == expected_even
@@ -1586,7 +1734,7 @@ async def exhaustive_read_row_routing_normal_and_replay(dut):
         for rt in range(8):
             dut.rs_address.value = rs
             dut.rt_address.value = rt
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             expected_rt_row = (rt >> 1) & 3
             assert int(dut.read_row_even.value) == expected_rt_row
             assert int(dut.read_row_odd.value) == expected_rt_row
@@ -1598,7 +1746,7 @@ async def exhaustive_read_row_routing_normal_and_replay(dut):
     assert int(dut.replay_state.value) == 0
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def empty_path_scan_else_boundary_reconvergence_and_skipped_halt(dut):
     await fetch_start(dut)
     words = [0x3000 + i for i in range(15)] + [0xF000]
@@ -1670,7 +1818,7 @@ async def empty_path_scan_else_boundary_reconvergence_and_skipped_halt(dut):
     await fetch_edge(dut)
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def halt_commit_freeze_go_and_upload_priority(dut):
     await fetch_start(dut)
     words = [0x4000 + i for i in range(15)] + [0xF000]
@@ -1734,7 +1882,7 @@ async def halt_commit_freeze_go_and_upload_priority(dut):
         assert fetch_pc(dut) == 0
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def cross_cutting_cycle_invariants(dut):
     """Stress a mixed schedule and assert sequencer invariants every cycle."""
     await fetch_start(dut)
@@ -1768,7 +1916,7 @@ async def cross_cutting_cycle_invariants(dut):
             dut.stack_top_target.value = 0 if current_pc is None else current_pc
             dut.bank_conflict.value = 1  # reconverge must beat it
 
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert not (int(dut.operand_hold_load.value) and int(dut.operand_hold_use.value))
         if int(dut.done.value):
             assert int(dut.instruction_commit.value) == 0
@@ -1806,7 +1954,7 @@ async def cross_cutting_cycle_invariants(dut):
             break
 
 
-@for_top("clm_fetch_seq")
+@hierarchy_test("clm_fetch_seq")
 async def upload_dominates_execution_control_and_same_target_nested_pop_can_refire(dut):
     """Priority/collision cases from the architectural sequencer contract."""
     await fetch_start(dut)
@@ -1824,7 +1972,7 @@ async def upload_dominates_execution_control_and_same_target_nested_pop_can_refi
     dut.any_lane_active.value = 1
     dut.stack_top_valid.value = 0
     dut.is_halt.value = 0
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 0
     assert int(dut.operand_hold_load.value) == 0, "upload must suppress a simultaneous conflict capture"
     assert int(dut.operand_hold_use.value) == 0
@@ -1844,7 +1992,7 @@ async def upload_dominates_execution_control_and_same_target_nested_pop_can_refi
     dut.stack_top_target.value = 0 if current_pc is None else current_pc
     dut.instruction_shift_data.value = 0xCAFE
     dut.instruction_shift_enable.value = 1
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 0
     assert int(dut.command_reconverge_pop.value) == 0, "upload must suppress reconvergence service"
     await fetch_edge(dut)
@@ -1871,7 +2019,7 @@ async def upload_dominates_execution_control_and_same_target_nested_pop_can_refi
     dut.stack_top_valid.value = 1
     dut.stack_top_type.value = 1
     dut.stack_top_target.value = target
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.command_reconverge_pop.value) == 1
     frozen = int(dut.current_instruction.value)
     await fetch_edge(dut)
@@ -1881,7 +2029,7 @@ async def upload_dominates_execution_control_and_same_target_nested_pop_can_refi
     dut.stack_top_valid.value = 1
     dut.stack_top_type.value = 1
     dut.stack_top_target.value = target
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.command_reconverge_pop.value) == 1
     await fetch_edge(dut)
     assert int(dut.current_instruction.value) == frozen
@@ -1889,16 +2037,16 @@ async def upload_dominates_execution_control_and_same_target_nested_pop_can_refi
     # Once the exposed top changes, the bubble disappears and the target
     # instruction can finally commit.
     dut.stack_top_valid.value = 0
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.command_reconverge_pop.value) == 0
     assert int(dut.instruction_commit.value) == 1
 
 
 # ===========================================================================
-# TEST_MULTIPLIER  (TOPLEVEL=clm_mult_bw)
+# TEST_MULTIPLIER  (REAL HIERARCHY: core.lane0.lane_alu.engine_multiplier)
 # ===========================================================================
 
-@for_top("clm_mult_bw")
+@hierarchy_test("clm_mult_bw")
 async def exhaustive_signed_8x8_product_space(dut):
     """Every signed int8 pair against mathematical two's-complement product."""
     vals = exhaustive_values()
@@ -1906,7 +2054,7 @@ async def exhaustive_signed_8x8_product_space(dut):
         for b in vals:
             dut.a.value = a
             dut.b.value = b
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             expected = u16(s8(a) * s8(b))
             got = int(dut.product.value)
             assert got == expected, (
@@ -1915,7 +2063,7 @@ async def exhaustive_signed_8x8_product_space(dut):
 
 
 # ===========================================================================
-# TEST_ALU  (TOPLEVEL=clm_alu)
+# TEST_ALU  (REAL HIERARCHY: core.lane0.lane_alu)
 # ===========================================================================
 
 # This bench deliberately drives semantic operations into the ALU.  It does not
@@ -1925,15 +2073,15 @@ async def exhaustive_signed_8x8_product_space(dut):
 
 
 async def alu_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").alu_start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     alu_drive_inert(dut)
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
 
 
 async def alu_stable_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 def alu_drive_inert(dut):
@@ -2028,7 +2176,7 @@ def alu_drive_sub_or_cmp(dut, rs: int, rt: int, reversed_route: bool = False):
     alu_set_writeback(dut, 0)
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_add_and_routing_equivalence(dut):
     await alu_start(dut)
     vals = exhaustive_values()
@@ -2036,17 +2184,17 @@ async def exhaustive_add_and_routing_equivalence(dut):
         for b in vals:
             expected = u8(a + b)
             alu_drive_add(dut, a, b, False)
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             got_normal = int(dut.writeback_bus.value)
             assert got_normal == expected, f"ADD {s8(a)}+{s8(b)} expected 0x{expected:02X}, got 0x{got_normal:02X}"
 
             alu_drive_add(dut, a, b, True)
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             got_reversed = int(dut.writeback_bus.value)
             assert got_reversed == expected, f"ADD reversed route {s8(a)}+{s8(b)} wrong"
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_subtraction_both_physical_routings(dut):
     await alu_start(dut)
     vals = exhaustive_values()
@@ -2055,7 +2203,7 @@ async def exhaustive_subtraction_both_physical_routings(dut):
             expected = u8(a - b)
             for reversed_route in (False, True):
                 alu_drive_sub_or_cmp(dut, a, b, reversed_route)
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 got = int(dut.writeback_bus.value)
                 assert got == expected, (
                     f"SUB route={'REV' if reversed_route else 'NORMAL'} "
@@ -2066,11 +2214,11 @@ async def exhaustive_subtraction_both_physical_routings(dut):
     # to understand even though the exhaustive sweep above already covers them.
     for a, b in ((0, 1), (1, 1), (0x80, 1), (0x7F, 0xFF), (0, 0x80)):
         alu_drive_sub_or_cmp(dut, a, b, False)
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert int(dut.writeback_bus.value) == u8(a - b)
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_signed_compare_truth_table_and_routing(dut):
     await alu_start(dut)
     vals = exhaustive_values()
@@ -2081,7 +2229,7 @@ async def exhaustive_signed_compare_truth_table_and_routing(dut):
                 for reversed_route in (False, True):
                     alu_drive_sub_or_cmp(dut, a, b, reversed_route)
                     dut.condition_select.value = cond
-                    await Timer(1, units="ns")
+                    await Timer(1, unit="ns")
                     got = int(dut.predicate_out.value)
                     assert got == expected, (
                         f"CMP cond={cond} route={'REV' if reversed_route else 'NORMAL'} "
@@ -2093,11 +2241,11 @@ async def exhaustive_signed_compare_truth_table_and_routing(dut):
         for cond in range(4):
             alu_drive_sub_or_cmp(dut, a, b, False)
             dut.condition_select.value = cond
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             assert int(dut.predicate_out.value) == int(signed_cmp8(a, b, cond))
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_bitwise_logic_and_writeback_isolation(dut):
     await alu_start(dut)
     vals = exhaustive_values()
@@ -2115,18 +2263,18 @@ async def exhaustive_bitwise_logic_and_writeback_isolation(dut):
                 dut.highway_right.value = b
                 dut.bitwise_select.value = select
                 alu_set_writeback(dut, 2)
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 expected = u8(fn(a, b))
                 assert int(dut.writeback_bus.value) == expected
 
                 # Commutativity makes physical highway reversal immaterial.
                 dut.highway_left.value = b
                 dut.highway_right.value = a
-                await Timer(1, units="ns")
+                await Timer(1, unit="ns")
                 assert int(dut.writeback_bus.value) == expected
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_logical_shifter_all_bytes_amounts_directions_and_routes(dut):
     await alu_start(dut)
     values = exhaustive_values()
@@ -2148,7 +2296,7 @@ async def exhaustive_logical_shifter_all_bytes_amounts_directions_and_routes(dut
                         dut.swap_operands.value = 0
                     dut.shift_direction.value = direction
                     alu_set_writeback(dut, 1)
-                    await Timer(1, units="ns")
+                    await Timer(1, unit="ns")
                     got = int(dut.writeback_bus.value)
                     assert got == expected, (
                         f"SHIFT dir={direction} data=0x{data:02X} amtbyte=0x{amount_byte:02X} "
@@ -2156,7 +2304,7 @@ async def exhaustive_logical_shifter_all_bytes_amounts_directions_and_routes(dut
                     )
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
     await alu_start(dut)
     vals = exhaustive_values()
@@ -2169,7 +2317,7 @@ async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
         dut.force_one_box2.value = 1
         dut.prepare_zero.value = 1
         alu_set_writeback(dut, 0)
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert int(dut.writeback_bus.value) == value
 
         # MOV source on the odd/right highway.
@@ -2179,7 +2327,7 @@ async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
         dut.force_one_box1.value = 1
         dut.prepare_zero.value = 1
         alu_set_writeback(dut, 0)
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert int(dut.writeback_bus.value) == value
 
         # LDI must be immune to junk on both register highways.
@@ -2192,7 +2340,7 @@ async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
             dut.force_one_box2.value = 1
             dut.prepare_zero.value = 1
             alu_set_writeback(dut, 0)
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             assert int(dut.writeback_bus.value) == value
 
     # Negative pass-through is the strongest proof that force-one means +1,
@@ -2203,11 +2351,11 @@ async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
         dut.force_one_box2.value = 1
         dut.prepare_zero.value = 1
         alu_set_writeback(dut, 0)
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         assert int(dut.writeback_bus.value) == value
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def exhaustive_mac_products_then_chains_wrap_and_accumulator_management(dut):
     await alu_start(dut)
     vals = exhaustive_values()
@@ -2269,10 +2417,10 @@ async def exhaustive_mac_products_then_chains_wrap_and_accumulator_management(du
     alu_drive_inert(dut)
     dut.accumulator_half_select.value = 0
     alu_set_writeback(dut, 3)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 0x34
     dut.accumulator_half_select.value = 1
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 0xAB
 
     # LDAC -> MAC starts from loaded 16-bit state.
@@ -2297,7 +2445,7 @@ async def exhaustive_mac_products_then_chains_wrap_and_accumulator_management(du
     assert alu_accumulator(dut) == before
 
 
-@for_top("clm_alu")
+@hierarchy_test("clm_alu")
 async def accumulator_update_priority_and_writeback_source_exclusivity(dut):
     await alu_start(dut)
     await alu_clear_acc(dut)
@@ -2334,7 +2482,7 @@ async def accumulator_update_priority_and_writeback_source_exclusivity(dut):
     # Arithmetic
     alu_drive_add(dut, 11, 7, False)
     alu_set_writeback(dut, 0)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 18
     # Shift
     alu_drive_inert(dut)
@@ -2342,7 +2490,7 @@ async def accumulator_update_priority_and_writeback_source_exclusivity(dut):
     dut.highway_right.value = 1
     dut.shift_direction.value = 1
     alu_set_writeback(dut, 1)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 0x40
     # Bitwise
     alu_drive_inert(dut)
@@ -2350,24 +2498,24 @@ async def accumulator_update_priority_and_writeback_source_exclusivity(dut):
     dut.highway_right.value = 0x0F
     dut.bitwise_select.value = 0
     alu_set_writeback(dut, 2)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 0x05
     # MVAC
     alu_drive_inert(dut)
     dut.accumulator_half_select.value = 0
     alu_set_writeback(dut, 3)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 0x34
 
 
 # ===========================================================================
-# TEST_LANE  (TOPLEVEL=clm_lane)
+# TEST_LANE  (REAL HIERARCHY: core.lane0)
 # ===========================================================================
 
 async def lane_stable_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 def lane_inert(dut):
@@ -2402,19 +2550,19 @@ def lane_inert(dut):
 
 
 async def lane_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").lane_start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     lane_inert(dut)
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
 
 
 async def lane_read_reg(dut, reg: int) -> int:
     row = (reg >> 1) & 3
     if reg & 1:
         dut.read_row_odd.value = row
-        await Timer(1, units="ns")
+        await Timer(1, unit="ns")
         return int(dut.lane_regfile.read_data_odd.value)
     dut.read_row_even.value = row
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     return int(dut.lane_regfile.read_data_even.value)
 
 
@@ -2454,7 +2602,7 @@ async def lane_ldac_from_reg(dut, reg: int, high: int = 0, active: int = 1, comm
         dut.read_row_odd.value = row
     else:
         dut.read_row_even.value = row
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     await lane_stable_edge(dut)
     lane_inert(dut)
 
@@ -2529,7 +2677,7 @@ async def lane_capture_replay_binary(dut, rs: int, rt: int, rd: int, op: str):
         expected = u8(rs_val - rt_val)
     else:
         raise ValueError(op)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     # Resolved highways themselves are useful diagnostics, not the oracle.
     assert int(dut.highway_left.value) == rs_val
     assert int(dut.highway_right.value) == rt_val
@@ -2539,7 +2687,7 @@ async def lane_capture_replay_binary(dut, rs: int, rt: int, rd: int, op: str):
     return expected
 
 
-@for_top("clm_lane")
+@hierarchy_test("clm_lane")
 async def lane_state_qualification_r0_laneid_and_predicate_permission(dut):
     await lane_start(dut)
 
@@ -2582,11 +2730,11 @@ async def lane_state_qualification_r0_laneid_and_predicate_permission(dut):
         for active in (0, 1):
             dut.instruction_commit.value = commit
             dut.lane_active.value = active
-            await Timer(1, units="ns")
+            await Timer(1, unit="ns")
             assert int(dut.predicate_write_qualified.value) == (commit & active)
 
 
-@for_top("clm_lane")
+@hierarchy_test("clm_lane")
 async def bank_conflict_hold_replay_odd_even_same_register_and_r0(dut):
     await lane_start(dut)
     # Use values chosen to make operand order observable.
@@ -2646,7 +2794,7 @@ async def bank_conflict_hold_replay_odd_even_same_register_and_r0(dut):
     assert expected == u8(0 - values[2])
 
 
-@for_top("clm_lane")
+@hierarchy_test("clm_lane")
 async def mov_ldac_mac_mvac_and_signed_compare_through_lane_front_end(dut):
     await lane_start(dut)
     for reg, value in {1: 0xF9, 2: 12, 3: 13, 4: 0x80}.items():
@@ -2696,13 +2844,13 @@ async def mov_ldac_mac_mvac_and_signed_compare_through_lane_front_end(dut):
     dut.predicate_write_enable.value = 1
     dut.instruction_commit.value = 1
     dut.lane_active.value = 1
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     expected = int(signed_cmp8(0xF9, 0x80, 0))
     assert int(dut.predicate_out.value) == expected
     assert int(dut.predicate_write_qualified.value) == 1
 
 
-@for_top("clm_lane")
+@hierarchy_test("clm_lane")
 async def no_architectural_state_changes_when_commit_is_low(dut):
     await lane_start(dut)
     for reg in range(1, 8):
@@ -2737,17 +2885,17 @@ async def no_architectural_state_changes_when_commit_is_low(dut):
 
 
 # ===========================================================================
-# TEST_SPI_HOST  (TOPLEVEL=clm_spi_host)
+# TEST_SPI_HOST  (REAL HIERARCHY: core.spi_host)
 # ===========================================================================
 
 async def spi_stable_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 async def spi_reset_spi(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.spi_sclk.value = 0
     dut.spi_mosi.value = 0
     dut.spi_cs_n.value = 1
@@ -2760,7 +2908,7 @@ async def spi_reset_spi(dut):
     await ClockCycles(dut.clk, 4)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 4)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
 
 
 def spi_expected_status(done: int, count: int) -> int:
@@ -2809,7 +2957,7 @@ async def spi_command_only_with_pulse_record(spi, signal_name: str, command: int
     return widths, samples
 
 
-@for_top("clm_spi_host")
+@hierarchy_test("clm_spi_host")
 async def reset_synchronizers_and_no_phantom_edges(dut):
     await spi_reset_spi(dut)
     assert int(dut.sclk_sync.value) == 0
@@ -2828,9 +2976,9 @@ async def reset_synchronizers_and_no_phantom_edges(dut):
     await ClockCycles(dut.clk, 5)
     before = int(dut.transaction_counter.value)
     await FallingEdge(dut.clk)
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
     dut.spi_sclk.value = 1
-    await Timer(2, units="ns")
+    await Timer(2, unit="ns")
     dut.spi_sclk.value = 0
     await ClockCycles(dut.clk, 5)
     assert int(dut.transaction_counter.value) == before
@@ -2838,9 +2986,9 @@ async def reset_synchronizers_and_no_phantom_edges(dut):
     # MOSI activity alone is data, never a clock event.
     for _ in range(5):
         dut.spi_mosi.value = 1
-        await Timer(3, units="ns")
+        await Timer(3, unit="ns")
         dut.spi_mosi.value = 0
-        await Timer(3, units="ns")
+        await Timer(3, unit="ns")
     await ClockCycles(dut.clk, 3)
     assert int(dut.transaction_counter.value) == before
 
@@ -2848,7 +2996,7 @@ async def reset_synchronizers_and_no_phantom_edges(dut):
     await ClockCycles(dut.clk, 4)
 
 
-@for_top("clm_spi_host")
+@hierarchy_test("clm_spi_host")
 async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumulator_reads(dut):
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
@@ -2879,7 +3027,7 @@ async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumula
     assert await spi.transaction(SPI_CMD_ACC0 + 2, 0) == 0x1357
 
 
-@for_top("clm_spi_host")
+@hierarchy_test("clm_spi_host")
 async def load_framing_every_data_pattern_pulse_width_counter_and_nop_semantics(dut):
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
@@ -2928,7 +3076,7 @@ async def load_framing_every_data_pattern_pulse_width_counter_and_nop_semantics(
     assert int(dut.go.value) == 0
 
 
-@for_top("clm_spi_host")
+@hierarchy_test("clm_spi_host")
 async def every_incomplete_load_length_is_noncommitting_but_go_can_fire_after_command_phase(dut):
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
@@ -2954,7 +3102,7 @@ async def every_incomplete_load_length_is_noncommitting_but_go_can_fire_after_co
     assert int(dut.load_counter.value) == 0
 
 
-@for_top("clm_spi_host")
+@hierarchy_test("clm_spi_host")
 async def go_data_phase_ignored_exactly_one_pulse_and_clears_load_count(dut):
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
@@ -2977,7 +3125,7 @@ async def go_data_phase_ignored_exactly_one_pulse_and_clears_load_count(dut):
         assert int(dut.instruction_shift_enable.value) == 0
 
 
-@for_top("clm_spi_host")
+@hierarchy_test("clm_spi_host")
 async def command_register_all_eight_encodings_and_back_to_back_restart(dut):
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
@@ -3018,7 +3166,7 @@ async def command_register_all_eight_encodings_and_back_to_back_restart(dut):
 
 
 # ===========================================================================
-# TEST_TOP  (TOPLEVEL=tb)
+# TEST_TOP  (FIXED TINY TAPEOUT TOPLEVEL=tb)
 # ===========================================================================
 
 def top_core_handle(dut):
@@ -3030,7 +3178,7 @@ def top_core_handle(dut):
 
 
 async def top_reset_top(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, units="ns").start())
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
@@ -3042,7 +3190,7 @@ async def top_reset_top(dut):
     await ClockCycles(dut.clk, 5)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 5)
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     assert (int(dut.uo_out.value) & 1) == 1, "DONE must be high out of reset"
     return spi
 
@@ -3073,7 +3221,7 @@ async def top_run_loaded_kernel(dut, spi, timeout_cycles=512):
     waiting until spi.transaction() returned would miss the run entirely.
     """
     monitor = cocotb.start_soon(monitor_top_run(top_core_handle(dut), timeout_cycles=timeout_cycles))
-    await Timer(1, units="ns")
+    await Timer(1, unit="ns")
     await spi.transaction(SPI_CMD_GO, 0x0000)
     stats = await monitor
     assert stats.pc_advances in (None, 16), f"architectural run made {stats.pc_advances} PC/ring advances, expected 16"
@@ -3103,7 +3251,7 @@ async def top_load_and_run(dut, spi, kernel, expected_accs, expected_cycles=None
     return stats
 
 
-@for_top("tb")
+@cocotb.test()
 async def pin_mapping_debug_contract_unused_inputs_and_lane_ids(dut):
     spi = await top_reset_top(dut)
     assert int(dut.uio_oe.value) == 0b00000100
@@ -3149,7 +3297,7 @@ async def pin_mapping_debug_contract_unused_inputs_and_lane_ids(dut):
     assert [await spi_read_acc(spi, lane) for lane in range(4)] == before
 
 
-@for_top("tb")
+@cocotb.test()
 async def integer_datapath_reverse_routes_and_bitwise_end_to_end(dut):
     spi = await top_reset_top(dut)
     # R1 odd / R2 even forces SUBREV and SHLREV internally.  The programmer must
@@ -3168,7 +3316,7 @@ async def integer_datapath_reverse_routes_and_bitwise_end_to_end(dut):
     await top_load_and_run(dut, spi, kernel, [0x0037] * 4, expected_cycles=16)
 
 
-@for_top("tb")
+@cocotb.test()
 async def bank_conflict_costs_one_cycle_but_not_one_rotation_or_one_answer(dut):
     spi = await top_reset_top(dut)
 
@@ -3198,7 +3346,7 @@ async def bank_conflict_costs_one_cycle_but_not_one_rotation_or_one_answer(dut):
     assert free_stats.pc_advances in (None, 16)
 
 
-@for_top("tb")
+@cocotb.test()
 async def mac_chain_mvac_both_halves_ldac_roundtrip(dut):
     spi = await top_reset_top(dut)
     # 4*(12*13) = 624 = 0x0270.  MVAC both bytes, destroy ACC, then LDAC both
@@ -3223,7 +3371,7 @@ async def mac_chain_mvac_both_halves_ldac_roundtrip(dut):
     assert stats.commits == 16
 
 
-@for_top("tb")
+@cocotb.test()
 async def divergence_empty_then_empty_else_and_nested_depth_two(dut):
     spi = await top_reset_top(dut)
 
@@ -3317,7 +3465,7 @@ async def divergence_empty_then_empty_else_and_nested_depth_two(dut):
     assert st.commits == 16  # both sides live; only the two reconvergence bubbles add cycles
 
 
-@for_top("tb")
+@cocotb.test()
 async def debug_pins_track_scan_replay_and_commit_live(dut):
     spi = await top_reset_top(dut)
     # A bank-conflict kernel gives an externally visible replay phase.  Sample
@@ -3351,7 +3499,7 @@ async def debug_pins_track_scan_replay_and_commit_live(dut):
     )
 
 
-@for_top("tb")
+@cocotb.test()
 async def warm_go_resets_mask_and_stack_even_if_previous_run_halted_unbalanced(dut):
     spi = await top_reset_top(dut)
 
@@ -3391,7 +3539,7 @@ async def warm_go_resets_mask_and_stack_even_if_previous_run_halted_unbalanced(d
     second = await second_monitor
     assert second.cycles == 16 and second.commits == 16
 
-@for_top("tb")
+@cocotb.test()
 async def debug_scan_signature_is_externally_visible(dut):
     """The documented dead-path diagnostic must actually appear on uo_out.
 
