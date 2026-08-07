@@ -1,11 +1,15 @@
 `default_nettype none
 
-module clm_regfile (
+module clm_regfile #(
+    parameter [1:0] LANE_ID = 2'd0
+) (
     input wire clk,
 
     input wire write_enable,
     input wire [2:0] write_address,
     input wire [7:0] write_data,
+
+    input wire laneid_mode,
 
     input wire [1:0] read_row_even,
     output wire [7:0] read_data_even,
@@ -74,8 +78,13 @@ module clm_regfile (
     // even bank read tree
     wire [7:0] even_lower_pair;
     wire [7:0] even_upper_pair;
+    wire [7:0] r0_leaf;
 
-    assign even_lower_pair = read_row_even[0] ? reg_r2 : 8'h00;
+    assign r0_leaf[7:2] = 6'b000000;
+    assign r0_leaf[1]   = laneid_mode & LANE_ID[1];
+    assign r0_leaf[0]   = laneid_mode & LANE_ID[0];
+
+    assign even_lower_pair = read_row_even[0] ? reg_r2 : r0_leaf;
     assign even_upper_pair = read_row_even[0] ? reg_r6 : reg_r4;
     assign read_data_even = read_row_even[1] ? even_upper_pair : even_lower_pair;
 

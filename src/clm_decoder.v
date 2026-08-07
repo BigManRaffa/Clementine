@@ -124,20 +124,26 @@ module clm_decoder (
     wire mov_from_odd_bank;
 
     assign sub_normal_routing = select_sub & (~reversed_physical_order);
-    assign sub_reversed_routing = select_sub & ( reversed_physical_order);
+    assign sub_reversed_routing = select_sub & reversed_physical_order;
     assign cmp_normal_routing = select_cmp & (~reversed_physical_order);
-    assign cmp_reversed_routing = select_cmp & ( reversed_physical_order);
-    assign mov_from_even_bank = select_mov & (~rs_address[0]);
-    assign mov_from_odd_bank = select_mov & ( rs_address[0]);
+    assign cmp_reversed_routing = select_cmp & reversed_physical_order;
 
+    // 1010 bit[0]=0 -> MOV
+    // 1010 bit[0]=1 -> LANEID
     assign laneid_mode = select_mov & current_instruction[0];
+    wire normal_mov = select_mov & (~laneid_mode);
+    
+    assign mov_from_even_bank = normal_mov & (~rs_address[0]);
+    assign mov_from_odd_bank = normal_mov & rs_address[0];
 
+    // LDI is still the only immediate instruction.
+    // LANEID will come through the virtual R0 read leaf.
     assign select_immediate = select_ldi;
 
     // force +1 into the box thats not holding the source. the other box passes it, x1 also sign extends
     assign force_one_box1 = sub_reversed_routing | cmp_reversed_routing | mov_from_odd_bank;
 
-    assign force_one_box2 = select_add | sub_normal_routing | cmp_normal_routing | select_ldi | mov_from_even_bank;
+    assign force_one_box2 = select_add | sub_normal_routing | cmp_normal_routing | select_ldi | mov_from_even_bank | laneid_mode;
 
     // low on replay, front end already fixed rs left rt right, nothing to swap
     wire reversal_applicable;

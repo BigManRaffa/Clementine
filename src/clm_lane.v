@@ -64,17 +64,19 @@ module clm_lane #(
     wire [7:0] read_data_even;
     wire [7:0] read_data_odd;
     wire [7:0] writeback_bus;
-    wire [7:0] lane_writeback;
+    
+    wire [1:0] lane_read_row_even;
+    assign lane_read_row_even = laneid_mode ? 2'b00 : read_row_even;
 
-    assign lane_writeback = laneid_mode ? {6'b0, LANE_ID} : writeback_bus;
-
-
-    clm_regfile lane_regfile (
+    clm_regfile #(
+        .LANE_ID(LANE_ID)
+    ) lane_regfile (
         .clk (clk),
         .write_enable (qualified_register_write),
         .write_address (rd_address),
-        .write_data (lane_writeback),
-        .read_row_even (read_row_even),
+        .write_data (writeback_bus),
+        .laneid_mode (laneid_mode),
+        .read_row_even (lane_read_row_even),
         .read_data_even (read_data_even),
         .read_row_odd (read_row_odd),
         .read_data_odd (read_data_odd)
