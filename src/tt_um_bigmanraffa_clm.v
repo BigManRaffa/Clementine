@@ -175,7 +175,7 @@ module tt_um_bigmanraffa_clm (
         .force_one_box2 (force_one_box2),
         .swap_operands (swap_operands),
 
-        
+        .laneid_mode (laneid_mode),
 
         .subtract_prepare (subtract_prepare),
         .prepare_zero (prepare_zero),
