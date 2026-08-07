@@ -5,7 +5,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge, Timer
-from cocotb.handle import Force, Release
+from cocotb.handle import Deposit, Force, Release
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +187,27 @@ def exact_kernel(words: Sequence[int]) -> List[int]:
 # ---------------------------------------------------------------------------
 
 
+_GLOBAL_CLOCK_TASK = None
+_GLOBAL_CLOCK_PERIOD_NS = 20
+
+
+async def ensure_clock(dut, period_ns: int = 20):
+    """Start exactly one clock driver for the entire Cocotb regression."""
+    global _GLOBAL_CLOCK_TASK, _GLOBAL_CLOCK_PERIOD_NS
+    if _GLOBAL_CLOCK_TASK is None:
+        _GLOBAL_CLOCK_PERIOD_NS = period_ns
+        _GLOBAL_CLOCK_TASK = cocotb.start_soon(
+            Clock(dut.clk, period_ns, unit="ns").start()
+        )
+        await Timer(1, unit="ns")
+    elif period_ns != _GLOBAL_CLOCK_PERIOD_NS:
+        raise AssertionError(
+            f"clock already running at {_GLOBAL_CLOCK_PERIOD_NS} ns, requested {period_ns} ns"
+        )
+
+
 async def start_clock(dut, period_ns: int = 20):
-    cocotb.start_soon(Clock(dut.clk, period_ns, unit="ns").start())
-    await Timer(1, unit="ns")
+    await ensure_clock(dut, period_ns)
 
 
 async def active_low_reset(dut, cycles: int = 4):
@@ -457,6 +475,8 @@ async def monitor_top_run(dut, timeout_cycles: int = 256) -> RunStats:
     for _ in range(timeout_cycles):
         await RisingEdge(dut.clk)
         await ReadOnly()
+        if not value_is_resolvable(done_sig):
+            raise AssertionError("DONE/debug bus contains X/Z while waiting for run to start")
         if (int(done_sig.value) & 1) == 0:
             break
     else:
@@ -501,6 +521,8 @@ async def monitor_top_run(dut, timeout_cycles: int = 256) -> RunStats:
                 advances += 1
             prev_pc = new_pc
 
+        if not value_is_resolvable(done_sig):
+            raise AssertionError("DONE/debug bus contains X/Z during active run")
         if int(done_sig.value) & 1:
             final_instruction = None
             try:
@@ -530,6 +552,23 @@ async def monitor_top_run(dut, timeout_cycles: int = 256) -> RunStats:
 # the INPUT ports of the target child; its outputs/state/logic are untouched.
 # Every force is released after the test.  Full-chip tests do not force anything.
 # ---------------------------------------------------------------------------
+
+
+class _DepositedSignal:
+    """Writable view of a real storage element; no VPI force is left behind."""
+    def __init__(self, handle):
+        self._handle = handle
+
+    @property
+    def value(self):
+        return self._handle.value
+
+    @value.setter
+    def value(self, new_value):
+        self._handle.value = Deposit(new_value)
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
 
 
 class _ForcedSignal:
@@ -567,6 +606,35 @@ class _HierarchyDut:
         if name in self._force_inputs:
             return _ForcedSignal(handle, self._forced_registry)
         return handle
+
+
+class _DecoderHierarchyDut(_HierarchyDut):
+    """Drive decoder through the real fetch-sequencer source storage.
+
+    Icarus does not reliably honor a Force applied directly to a child input
+    net that is continuously driven by its parent.  The decoder's instruction
+    input really comes from instruction_ring[0], and replay_state really comes
+    from fetch_seq.fsm_state.  During the first three combinational decoder
+    tests the core clock has not started, so depositing those two real state
+    elements gives a stable, wrapper-free exhaustive stimulus source.
+    """
+    def __init__(self, root, target, force_inputs, forced_registry):
+        super().__init__(root, target, force_inputs, forced_registry)
+        fetch = _core(root).fetch_seq
+        try:
+            self._instruction_source = fetch.instruction_ring[0]
+        except Exception as exc:
+            raise AssertionError(
+                "Icarus did not expose fetch_seq.instruction_ring[0]; decoder exhaustive test cannot be driven"
+            ) from exc
+        self._replay_source = fetch.fsm_state
+
+    def __getattr__(self, name):
+        if name == "current_instruction":
+            return _DepositedSignal(self._instruction_source)
+        if name == "replay_state":
+            return _DepositedSignal(self._replay_source)
+        return super().__getattr__(name)
 
 
 def _core(root):
@@ -658,13 +726,22 @@ _HIER_TARGETS = {
 }
 
 
-def _release_forces(forced_registry):
+async def _release_forces(forced_registry):
+    """Release every VPI force from a writable phase before another test starts."""
+    # A failed assertion can unwind while Cocotb is in ReadOnly.  Advancing time
+    # first guarantees that Release() itself is legal and prevents poisoned
+    # forces from leaking into the next test.
+    await Timer(1, unit="ns")
+    errors = []
     for handle in list(forced_registry.values()):
         try:
             handle.value = Release()
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append((getattr(handle, "_path", repr(handle)), repr(exc)))
     forced_registry.clear()
+    await Timer(1, unit="ns")
+    if errors:
+        raise AssertionError("failed to release VPI forces: " + repr(errors))
 
 
 def hierarchy_test(target_name):
@@ -678,10 +755,24 @@ def hierarchy_test(target_name):
 
     def decorate(fn):
         async def guarded(root, *args, **kwargs):
+            # Never inherit the scheduler's ReadOnly phase from a previous test.
+            await Timer(1, unit="ns")
             root.ena.value = 1
             root.ui_in.value = 0
             root.uio_in.value = 0b00000001  # CS high, SCLK/MOSI low
-            root.rst_n.value = 1
+
+            # Decoder is deliberately first and purely combinational, so it can
+            # run before a clock exists.  Every sequential unit test shares ONE
+            # clock and begins with the real core control logic reset/halted.
+            if target_name == "clm_decoder":
+                root.rst_n.value = 1
+            else:
+                await ensure_clock(root, 20)
+                root.rst_n.value = 0
+                await ClockCycles(root.clk, 2)
+                root.rst_n.value = 1
+                await ClockCycles(root.clk, 1)
+                await Timer(1, unit="ns")
 
             path, force_inputs = _HIER_TARGETS[target_name]
             try:
@@ -693,7 +784,8 @@ def hierarchy_test(target_name):
                 ) from exc
 
             forced_registry = {}
-            unit = _HierarchyDut(
+            proxy_cls = _DecoderHierarchyDut if target_name == "clm_decoder" else _HierarchyDut
+            unit = proxy_cls(
                 root=root,
                 target=target,
                 force_inputs=force_inputs,
@@ -702,8 +794,10 @@ def hierarchy_test(target_name):
             try:
                 return await fn(unit, *args, **kwargs)
             finally:
-                _release_forces(forced_registry)
+                await _release_forces(forced_registry)
+                # Cleanup above deliberately advances out of ReadOnly.
                 root.uio_in.value = 0b00000001
+                await Timer(1, unit="ns")
 
         guarded.__name__ = fn.__name__
         guarded.__qualname__ = fn.__name__
@@ -1041,7 +1135,7 @@ async def format_independence_overlap_hunt(dut):
 # ===========================================================================
 
 async def regfile_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
     dut.write_enable.value = 0
     dut.write_address.value = 0
     dut.write_data.value = 0
@@ -1118,6 +1212,7 @@ async def register_file_exhaustive_architectural_behavior(dut):
         dut.write_data.value = 0xFF ^ addr
         await RisingEdge(dut.clk)
         await ReadOnly()
+        await Timer(1, unit="ns")
     after = await regfile_snapshot(dut)
     assert after == before
 
@@ -1231,7 +1326,7 @@ async def register_file_exhaustive_architectural_behavior(dut):
 # ===========================================================================
 
 async def mask_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
     dut.rst_n.value = 0
     dut.predicate_out.value = 0
     dut.predicate_write_qualified.value = 0
@@ -1340,7 +1435,7 @@ async def exhaustive_ifp_partition_and_roundtrip(dut):
     # by first splitting all lanes and selecting the desired true subset, then
     # perform the test split underneath it.  Reset between cases keeps the
     # construction unambiguous and also pounds reset semantics.
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
 
     for parent in range(16):
         for pred in range(16):
@@ -1533,7 +1628,7 @@ async def commands_work_even_with_zero_active_mask(dut):
 # ===========================================================================
 
 async def fetch_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
     dut.rst_n.value = 0
     dut.go.value = 0
     dut.instruction_shift_enable.value = 0
@@ -1650,6 +1745,7 @@ async def normal_commit_and_bank_conflict_capture_replay(dut):
     dut.rt_address.value = 4
     dut.bank_conflict.value = 0
     dut.is_halt.value = 0
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 1
     assert int(dut.operand_hold_load.value) == 0
     assert int(dut.operand_hold_use.value) == 0
@@ -1664,6 +1760,7 @@ async def normal_commit_and_bank_conflict_capture_replay(dut):
     dut.rs_address.value = 1
     dut.rt_address.value = 3
     dut.bank_conflict.value = 1
+    await Timer(1, unit="ns")
     held_instr = int(dut.current_instruction.value)
     held_pc = fetch_pc(dut)
     assert int(dut.instruction_commit.value) == 0
@@ -1760,6 +1857,7 @@ async def empty_path_scan_else_boundary_reconvergence_and_skipped_halt(dut):
     dut.stack_top_valid.value = 0
     dut.is_halt.value = 1
     dut.bank_conflict.value = 1
+    await Timer(1, unit="ns")
     start_pc = fetch_pc(dut)
     for step in range(20):
         assert int(dut.instruction_commit.value) == 0
@@ -1786,6 +1884,7 @@ async def empty_path_scan_else_boundary_reconvergence_and_skipped_halt(dut):
     dut.stack_top_valid.value = 1
     dut.stack_top_type.value = 0  # ELSE token
     dut.stack_top_target.value = 0
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 1, "ELSE boundary must commit even with mask=0"
     before = int(dut.current_instruction.value)
     await fetch_edge(dut)
@@ -1799,6 +1898,7 @@ async def empty_path_scan_else_boundary_reconvergence_and_skipped_halt(dut):
     dut.stack_top_type.value = 1
     dut.stack_top_target.value = 1
     dut.bank_conflict.value = 1
+    await Timer(1, unit="ns")
     frozen_instr = int(dut.current_instruction.value)
     frozen_pc = fetch_pc(dut)
     assert int(dut.command_reconverge_pop.value) == 1
@@ -1813,6 +1913,7 @@ async def empty_path_scan_else_boundary_reconvergence_and_skipped_halt(dut):
     # target instruction must now be allowed to commit.
     dut.stack_top_valid.value = 0
     dut.bank_conflict.value = 0
+    await Timer(1, unit="ns")
     assert int(dut.command_reconverge_pop.value) == 0
     assert int(dut.instruction_commit.value) == 1
     await fetch_edge(dut)
@@ -1830,6 +1931,7 @@ async def halt_commit_freeze_go_and_upload_priority(dut):
     dut.any_lane_active.value = 0
     dut.stack_top_valid.value = 0
     dut.is_halt.value = 1
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 0
     await fetch_edge(dut)
     assert int(dut.done.value) == 0
@@ -1838,6 +1940,7 @@ async def halt_commit_freeze_go_and_upload_priority(dut):
     # freezes all subsequent execution until a legal GO.
     dut.any_lane_active.value = 1
     dut.is_halt.value = 1
+    await Timer(1, unit="ns")
     before = int(dut.current_instruction.value)
     assert int(dut.instruction_commit.value) == 1
     await fetch_edge(dut)
@@ -1865,6 +1968,7 @@ async def halt_commit_freeze_go_and_upload_priority(dut):
     # the protocol contract and intentionally not asserted here.
     dut.instruction_shift_data.value = 0xCAFE
     dut.instruction_shift_enable.value = 1
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 0
     await fetch_edge(dut)
     dut.instruction_shift_enable.value = 0
@@ -2073,9 +2177,15 @@ async def exhaustive_signed_8x8_product_space(dut):
 
 
 async def alu_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
     alu_drive_inert(dut)
     await Timer(2, unit="ns")
+    # Accumulator intentionally has no reset in RTL; every independent ALU test
+    # establishes its own architectural starting state instead of inheriting a
+    # previous test's value.
+    await alu_clear_acc(dut)
+    alu_drive_inert(dut)
+    await Timer(1, unit="ns")
 
 
 async def alu_stable_edge(dut):
@@ -2550,9 +2660,26 @@ def lane_inert(dut):
 
 
 async def lane_start(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
     lane_inert(dut)
     await Timer(2, unit="ns")
+
+    # The lane datapath is intentionally unreset.  Each independent lane test
+    # therefore initializes all architectural storage through REAL lane control
+    # operations before checking behavior.
+    for reg in range(1, 8):
+        await lane_ldi(dut, reg, 0)
+    await lane_clear_acc(dut)
+
+    # operand_hold is also intentionally unreset. Capture grounded R0 once so a
+    # later replay test cannot inherit a value from an earlier test.
+    lane_inert(dut)
+    dut.read_row_even.value = 0
+    dut.conflict_bank_select.value = 0
+    dut.operand_hold_load.value = 1
+    await lane_stable_edge(dut)
+    lane_inert(dut)
+    await Timer(1, unit="ns")
 
 
 async def lane_read_reg(dut, reg: int) -> int:
@@ -2895,7 +3022,7 @@ async def spi_stable_edge(dut):
 
 
 async def spi_reset_spi(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
     dut.spi_sclk.value = 0
     dut.spi_mosi.value = 0
     dut.spi_cs_n.value = 1
@@ -3178,7 +3305,10 @@ def top_core_handle(dut):
 
 
 async def top_reset_top(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await ensure_clock(dut, 20)
+    # Always enter from a writable phase, even if the previous unit test ended
+    # after a ReadOnly sample.
+    await Timer(1, unit="ns")
     dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
@@ -3191,7 +3321,21 @@ async def top_reset_top(dut):
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 5)
     await Timer(1, unit="ns")
+    assert value_is_resolvable(dut.uo_out), "uo_out contains X/Z immediately after clean top reset"
     assert (int(dut.uo_out.value) & 1) == 1, "DONE must be high out of reset"
+
+    # R1-R7 and the 16-bit accumulator intentionally have no reset.  Earlier
+    # hierarchical unit tests are allowed to mutate them, so scrub every lane
+    # using a real Clementine program before each independent end-to-end test.
+    scrub = pad_kernel([
+        CLRACC(),
+        LDI(1, 0), LDI(2, 0), LDI(3, 0), LDI(4, 0),
+        LDI(5, 0), LDI(6, 0), LDI(7, 0),
+    ])
+    await spi_load_kernel(spi, scrub)
+    scrub_stats = await top_run_loaded_kernel(dut, spi)
+    assert scrub_stats.pc_advances in (None, 16)
+    assert value_is_resolvable(dut.uo_out), "uo_out became X/Z during architectural scrub"
     return spi
 
 
@@ -3483,6 +3627,7 @@ async def debug_pins_track_scan_replay_and_commit_live(dut):
         while not stop[0]:
             await RisingEdge(dut.clk)
             await ReadOnly()
+            assert value_is_resolvable(dut.uo_out), "uo_out contains X/Z during debug sampling"
             observations.append(int(dut.uo_out.value))
             top_assert_debug_mapping(dut)
 
@@ -3572,6 +3717,7 @@ async def debug_scan_signature_is_externally_visible(dut):
         while not stop[0]:
             await RisingEdge(dut.clk)
             await ReadOnly()
+            assert value_is_resolvable(dut.uo_out), "uo_out contains X/Z during scan sampling"
             observations.append(int(dut.uo_out.value))
 
     task = cocotb.start_soon(sampler())
