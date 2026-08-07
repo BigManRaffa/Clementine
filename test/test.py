@@ -553,11 +553,13 @@ def for_top(target: str):
     the standard TinyTapeout tb wrapper.
     """
     def decorate(fn):
-        @functools.wraps(fn)
         async def guarded(dut, *args, **kwargs):
             if not _target_matches(dut, target):
                 return
             return await fn(dut, *args, **kwargs)
+
+        guarded.__name__ = fn.__name__
+        guarded.__doc__ = fn.__doc__
         return cocotb.test()(guarded)
     return decorate
 
