@@ -126,12 +126,8 @@ module clm_fetch_seq (
     end
 
     // slots 0-14 are plain enable flops, all selection collapses into slot 15's 2:1. upload wins
-// slots 0-14 are plain enable flops, all selection collapses into slot 15's 2:1. upload wins
-    wire ring_shift_active = instruction_shift_enable | execution_advance;
-    wire [15:0] ring_insert_data = instruction_shift_enable ? instruction_shift_data : instruction_ring[0];
-
     always @(posedge clk) begin
-        if (ring_shift_active) begin
+        if (instruction_shift_enable) begin
             instruction_ring[0] <= instruction_ring[1];
             instruction_ring[1] <= instruction_ring[2];
             instruction_ring[2] <= instruction_ring[3];
@@ -147,7 +143,25 @@ module clm_fetch_seq (
             instruction_ring[12] <= instruction_ring[13];
             instruction_ring[13] <= instruction_ring[14];
             instruction_ring[14] <= instruction_ring[15];
-            instruction_ring[15] <= ring_insert_data;
+            instruction_ring[15] <= instruction_shift_data;
+        end
+        else if (execution_advance) begin
+            instruction_ring[0] <= instruction_ring[1];
+            instruction_ring[1] <= instruction_ring[2];
+            instruction_ring[2] <= instruction_ring[3];
+            instruction_ring[3] <= instruction_ring[4];
+            instruction_ring[4] <= instruction_ring[5];
+            instruction_ring[5] <= instruction_ring[6];
+            instruction_ring[6] <= instruction_ring[7];
+            instruction_ring[7] <= instruction_ring[8];
+            instruction_ring[8] <= instruction_ring[9];
+            instruction_ring[9] <= instruction_ring[10];
+            instruction_ring[10] <= instruction_ring[11];
+            instruction_ring[11] <= instruction_ring[12];
+            instruction_ring[12] <= instruction_ring[13];
+            instruction_ring[13] <= instruction_ring[14];
+            instruction_ring[14] <= instruction_ring[15];
+            instruction_ring[15] <= instruction_ring[0];
         end
     end
 
