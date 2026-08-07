@@ -81,7 +81,7 @@ module clm_regfile (
 
     // odd bank read tree
     wire [7:0] odd_lower_pair;
-    wire [7:0] odd_upper_pair;/
+    wire [7:0] odd_upper_pair;
 
     assign odd_lower_pair = read_row_odd[0] ? reg_r3 : reg_r1;
     assign odd_upper_pair = read_row_odd[0] ? reg_r7 : reg_r5;
