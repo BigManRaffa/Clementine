@@ -184,7 +184,7 @@ module clm_decoder (
     assign same_bank_parity = ~(rs_address[0] ^ rt_address[0]);
 
     // not replay-gated on purpose. rs/rt still in the ir so it keeps firing, sequencer just ignores it
-    assign bank_conflict = uses_both_sources & rs_is_not_r0 & rt_is_not_r0 & rs_differs_from_rt & same_bank_parity;
+    assign bank_conflict = uses_both_sources & same_bank_parity;
 
 endmodule
 `default_nettype wire
