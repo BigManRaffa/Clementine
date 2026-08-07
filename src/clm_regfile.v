@@ -71,7 +71,7 @@ module clm_regfile (
         if (write_enable_r7) reg_r7 <= write_data;
     end
 
-    / even bank read tree
+    // even bank read tree
     wire [7:0] even_lower_pair;
     wire [7:0] even_upper_pair;
 
