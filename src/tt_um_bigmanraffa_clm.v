@@ -175,7 +175,7 @@ module tt_um_bigmanraffa_clm (
         .force_one_box2 (force_one_box2),
         .swap_operands (swap_operands),
 
-        .laneid_mode (laneid_mode),
+        
 
         .subtract_prepare (subtract_prepare),
         .prepare_zero (prepare_zero),
@@ -216,6 +216,11 @@ module tt_um_bigmanraffa_clm (
         .stack_top_target (stack_top_target)
     );
 
+    wire [7:0] lane0_imm = immediate_value & {8{~laneid_mode}};
+    wire [7:0] lane1_imm = (immediate_value & {8{~laneid_mode}}) | {7'b0, laneid_mode};
+    wire [7:0] lane2_imm = (immediate_value & {8{~laneid_mode}}) | {6'b0, laneid_mode, 1'b0};
+    wire [7:0] lane3_imm = (immediate_value & {8{~laneid_mode}}) | {6'b0, laneid_mode, laneid_mode};
+
     clm_lane #(.LANE_ID(2'd0)) lane0 (
         .clk (clk),
 
@@ -223,7 +228,7 @@ module tt_um_bigmanraffa_clm (
         .read_row_odd (read_row_odd),
         .conflict_bank_select (conflict_bank_select),
         .rd_address (rd_address),
-        .immediate_value (immediate_value),
+        .immediate_value (lane0_imm),
 
         .operand_hold_load (operand_hold_load),
         .operand_hold_use (operand_hold_use),
@@ -254,7 +259,7 @@ module tt_um_bigmanraffa_clm (
 
         .lane_active (lane_active[0]),
 
-        .laneid_mode (laneid_mode),
+        
 
         .predicate_out (predicate_out[0]),
         .predicate_write_qualified (predicate_write_qualified[0]),
@@ -268,7 +273,7 @@ module tt_um_bigmanraffa_clm (
         .read_row_odd (read_row_odd),
         .conflict_bank_select (conflict_bank_select),
         .rd_address (rd_address),
-        .immediate_value (immediate_value),
+        .immediate_value (lane1_imm),
 
         .operand_hold_load (operand_hold_load),
         .operand_hold_use (operand_hold_use),
@@ -299,7 +304,7 @@ module tt_um_bigmanraffa_clm (
 
         .lane_active (lane_active[1]),
 
-        .laneid_mode (laneid_mode),
+        
 
         .predicate_out (predicate_out[1]),
         .predicate_write_qualified (predicate_write_qualified[1]),
@@ -313,7 +318,7 @@ module tt_um_bigmanraffa_clm (
         .read_row_odd (read_row_odd),
         .conflict_bank_select (conflict_bank_select),
         .rd_address (rd_address),
-        .immediate_value (immediate_value),
+        .immediate_value (lane2_imm),
 
         .operand_hold_load (operand_hold_load),
         .operand_hold_use (operand_hold_use),
@@ -344,7 +349,7 @@ module tt_um_bigmanraffa_clm (
 
         .lane_active (lane_active[2]),
 
-        .laneid_mode (laneid_mode),
+        
 
         .predicate_out (predicate_out[2]),
         .predicate_write_qualified (predicate_write_qualified[2]),
@@ -358,7 +363,7 @@ module tt_um_bigmanraffa_clm (
         .read_row_odd (read_row_odd),
         .conflict_bank_select (conflict_bank_select),
         .rd_address (rd_address),
-        .immediate_value (immediate_value),
+        .immediate_value (lane3_imm),
 
         .operand_hold_load (operand_hold_load),
         .operand_hold_use (operand_hold_use),
@@ -389,7 +394,7 @@ module tt_um_bigmanraffa_clm (
 
         .lane_active (lane_active[3]),
 
-        .laneid_mode (laneid_mode),
+        
 
         .predicate_out (predicate_out[3]),
         .predicate_write_qualified (predicate_write_qualified[3]),

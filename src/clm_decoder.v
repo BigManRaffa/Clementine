@@ -132,12 +132,12 @@ module clm_decoder (
 
     assign laneid_mode = select_mov & current_instruction[0];
 
-    assign select_immediate = select_ldi;
+    assign select_immediate = select_ldi | laneid_mode;
 
     // force +1 into the box thats not holding the source. the other box passes it, x1 also sign extends
-    assign force_one_box1 = sub_reversed_routing | cmp_reversed_routing | mov_from_odd_bank;
+    assign force_one_box1 = (sub_reversed_routing | cmp_reversed_routing | mov_from_odd_bank) & (~laneid_mode);
 
-    assign force_one_box2 = select_add | sub_normal_routing | cmp_normal_routing | select_ldi | mov_from_even_bank;
+    assign force_one_box2 = select_add | sub_normal_routing | cmp_normal_routing | select_ldi | mov_from_even_bank | laneid_mode;
 
     // low on replay, front end already fixed rs left rt right, nothing to swap
     wire reversal_applicable;
@@ -177,14 +177,8 @@ module clm_decoder (
 
     assign uses_both_sources = select_add | select_sub | select_and | select_or | select_xor | select_shift | select_mac | select_cmp;
 
-    wire rs_is_not_r0;
-    wire rt_is_not_r0;
-    wire rs_differs_from_rt;
     wire same_bank_parity;
-
-    assign rs_is_not_r0 = rs_address[2] | rs_address[1] | rs_address[0];
-    assign rt_is_not_r0 = rt_address[2] | rt_address[1] | rt_address[0];
-    assign rs_differs_from_rt = (rs_address[2] ^ rt_address[2]) | (rs_address[1] ^ rt_address[1]) | (rs_address[0] ^ rt_address[0]);
+    
     assign same_bank_parity = ~(rs_address[0] ^ rt_address[0]);
 
     // not replay-gated on purpose. rs/rt still in the ir so it keeps firing, sequencer just ignores it

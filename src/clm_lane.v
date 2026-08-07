@@ -21,8 +21,7 @@ module clm_lane #(
     input wire force_one_box1,
     input wire force_one_box2,
     input wire swap_operands,
-    input wire laneid_mode,
-
+    
     input wire subtract_prepare,
     input wire prepare_zero,
     input wire select_accumulator,
@@ -64,16 +63,12 @@ module clm_lane #(
     wire [7:0] read_data_even;
     wire [7:0] read_data_odd;
     wire [7:0] writeback_bus;
-    wire [7:0] lane_writeback;
-
-    assign lane_writeback = laneid_mode ? {6'b0, LANE_ID} : writeback_bus;
-
 
     clm_regfile lane_regfile (
         .clk (clk),
         .write_enable (qualified_register_write),
         .write_address (rd_address),
-        .write_data (lane_writeback),
+        .write_data (writeback_bus),
         .read_row_even (read_row_even),
         .read_data_even (read_data_even),
         .read_row_odd (read_row_odd),
