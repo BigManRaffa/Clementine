@@ -6,7 +6,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = tt_um_rafeedkhan_clementine.v \
+PROJECT_SOURCES = tt_um_bigmanraffa_clm.v \
                   clm_spi_host.v \
                   clm_fetch_seq.v \
                   clm_decoder.v \

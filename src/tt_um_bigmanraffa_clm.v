@@ -4,7 +4,7 @@
  */
 `default_nettype none
 
-module tt_um_clementine (
+module tt_um_bigmanraffa_clm (
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
     input  wire [7:0] uio_in,   // IOs: Input path
@@ -83,6 +83,8 @@ module tt_um_clementine (
     wire [15:0] lane2_accumulator;
     wire [15:0] lane3_accumulator;
 
+    wire laneid_mode;
+    
     wire any_lane_active;
     assign any_lane_active = |lane_active;
 
@@ -173,6 +175,8 @@ module tt_um_clementine (
         .force_one_box2 (force_one_box2),
         .swap_operands (swap_operands),
 
+        .laneid_mode (laneid_mode),
+
         .subtract_prepare (subtract_prepare),
         .prepare_zero (prepare_zero),
         .select_accumulator (select_accumulator),
@@ -212,7 +216,7 @@ module tt_um_clementine (
         .stack_top_target (stack_top_target)
     );
 
-    clm_lane lane0 (
+    clm_lane #(.LANE_ID(2'd0)) lane0 (
         .clk (clk),
 
         .read_row_even (read_row_even),
@@ -250,12 +254,14 @@ module tt_um_clementine (
 
         .lane_active (lane_active[0]),
 
+        .laneid_mode (laneid_mode),
+
         .predicate_out (predicate_out[0]),
         .predicate_write_qualified (predicate_write_qualified[0]),
         .accumulator_value (lane0_accumulator)
     );
 
-    clm_lane lane1 (
+    clm_lane #(.LANE_ID(2'd1)) lane1 (
         .clk (clk),
 
         .read_row_even (read_row_even),
@@ -293,12 +299,14 @@ module tt_um_clementine (
 
         .lane_active (lane_active[1]),
 
+        .laneid_mode (laneid_mode),
+
         .predicate_out (predicate_out[1]),
         .predicate_write_qualified (predicate_write_qualified[1]),
         .accumulator_value (lane1_accumulator)
     );
 
-    clm_lane lane2 (
+    clm_lane #(.LANE_ID(2'd2)) lane2 (
         .clk (clk),
 
         .read_row_even (read_row_even),
@@ -336,12 +344,14 @@ module tt_um_clementine (
 
         .lane_active (lane_active[2]),
 
+        .laneid_mode (laneid_mode),
+
         .predicate_out (predicate_out[2]),
         .predicate_write_qualified (predicate_write_qualified[2]),
         .accumulator_value (lane2_accumulator)
     );
 
-    clm_lane lane3 (
+    clm_lane #(.LANE_ID(2'd3)) lane3 (
         .clk (clk),
 
         .read_row_even (read_row_even),
@@ -378,6 +388,8 @@ module tt_um_clementine (
         .writeback_select (writeback_select),
 
         .lane_active (lane_active[3]),
+
+        .laneid_mode (laneid_mode),
 
         .predicate_out (predicate_out[3]),
         .predicate_write_qualified (predicate_write_qualified[3]),

@@ -25,6 +25,8 @@ module clm_decoder (
     output wire force_one_box2,
     output wire swap_operands,
 
+    output wire laneid_mode,
+
     output wire subtract_prepare,
     output wire prepare_zero,
     output wire select_accumulator,
@@ -127,6 +129,8 @@ module clm_decoder (
     assign cmp_reversed_routing = select_cmp & ( reversed_physical_order);
     assign mov_from_even_bank = select_mov & (~rs_address[0]);
     assign mov_from_odd_bank = select_mov & ( rs_address[0]);
+
+    assign laneid_mode = select_mov & current_instruction[0];
 
     assign select_immediate = select_ldi;
 
