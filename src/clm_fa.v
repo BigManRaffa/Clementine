@@ -10,6 +10,6 @@ wire axb;
 
     assign axb = a ^ b;
     assign sum = axb ^ cin;
-    assign cout = (a & b) | (axb & cin);
+    assign cout = axb ? cin : a;
 
 endmodule
