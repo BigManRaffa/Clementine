@@ -1,4 +1,3 @@
-
 import os
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
@@ -188,23 +187,53 @@ def exact_kernel(words: Sequence[int]) -> List[int]:
 # ---------------------------------------------------------------------------
 
 
-_GLOBAL_CLOCK_TASK = None
-_GLOBAL_CLOCK_PERIOD_NS = 20
+_TEST_CLOCK_TASK = None
+_TEST_CLOCK_PERIOD_NS = 20
 
 
 async def ensure_clock(dut, period_ns: int = 20):
-    """Start exactly one clock driver for the entire Cocotb regression."""
-    global _GLOBAL_CLOCK_TASK, _GLOBAL_CLOCK_PERIOD_NS
-    if _GLOBAL_CLOCK_TASK is None:
-        _GLOBAL_CLOCK_PERIOD_NS = period_ns
-        _GLOBAL_CLOCK_TASK = cocotb.start_soon(
+    """Start one clock for THIS Cocotb test.
+
+    Cocotb kills child tasks when a test ends.  Therefore a clock task cannot be
+    shared across separate @cocotb.test() functions.  The previous regression
+    kept a stale global Task handle after Cocotb had killed the actual clock,
+    causing test #2 to lose clk and the simulator to terminate; all later tests
+    then appeared as 0 ns failures.
+
+    This helper restarts the clock whenever the stored task is absent or done,
+    and repeated calls inside the same test reuse that one live task.
+    """
+    global _TEST_CLOCK_TASK, _TEST_CLOCK_PERIOD_NS
+
+    if _TEST_CLOCK_TASK is not None:
+        try:
+            task_done = _TEST_CLOCK_TASK.done()
+        except Exception:
+            task_done = True
+        if task_done:
+            _TEST_CLOCK_TASK = None
+
+    if _TEST_CLOCK_TASK is None:
+        _TEST_CLOCK_PERIOD_NS = period_ns
+        _TEST_CLOCK_TASK = cocotb.start_soon(
             Clock(dut.clk, period_ns, unit="ns").start()
         )
         await Timer(1, unit="ns")
-    elif period_ns != _GLOBAL_CLOCK_PERIOD_NS:
+    elif period_ns != _TEST_CLOCK_PERIOD_NS:
         raise AssertionError(
-            f"clock already running at {_GLOBAL_CLOCK_PERIOD_NS} ns, requested {period_ns} ns"
+            f"clock already running at {_TEST_CLOCK_PERIOD_NS} ns, requested {period_ns} ns"
         )
+
+
+def stop_test_clock():
+    """Stop the current test's clock and forget its Task handle."""
+    global _TEST_CLOCK_TASK
+    if _TEST_CLOCK_TASK is not None:
+        try:
+            _TEST_CLOCK_TASK.kill()
+        except Exception:
+            pass
+        _TEST_CLOCK_TASK = None
 
 
 async def start_clock(dut, period_ns: int = 20):
@@ -763,8 +792,8 @@ def hierarchy_test(target_name):
             root.uio_in.value = 0b00000001  # CS high, SCLK/MOSI low
 
             # Decoder is deliberately first and purely combinational, so it can
-            # run before a clock exists.  Every sequential unit test shares ONE
-            # clock and begins with the real core control logic reset/halted.
+            # run before a clock exists.  Every sequential unit test gets ONE clock for that test only and begins
+            # with the real core control logic reset/halted.
             if target_name == "clm_decoder":
                 root.rst_n.value = 1
             else:
@@ -799,6 +828,9 @@ def hierarchy_test(target_name):
                 # Cleanup above deliberately advances out of ReadOnly.
                 root.uio_in.value = 0b00000001
                 await Timer(1, unit="ns")
+                # A Cocotb clock is a child Task of this test.  Never try to
+                # carry its Task handle into the next @cocotb.test().
+                stop_test_clock()
 
         guarded.__name__ = fn.__name__
         guarded.__qualname__ = fn.__name__

@@ -84,6 +84,9 @@ module tt_um_bigmanraffa_clm (
     wire [15:0] lane3_accumulator;
 
     wire laneid_mode;
+
+    wire targeted_write;
+    wire [1:0] lane_target;
     
     wire any_lane_active;
     assign any_lane_active = |lane_active;
@@ -178,6 +181,8 @@ module tt_um_bigmanraffa_clm (
         .swap_operands (swap_operands),
 
         .laneid_mode (laneid_mode),
+        .targeted_write (targeted_write),
+        .lane_target (lane_target),
 
         .subtract_prepare (subtract_prepare),
         .prepare_zero (prepare_zero),
@@ -258,6 +263,9 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
+        .targeted_write (targeted_write),
+        .lane_target (lane_target),
+
         .predicate_out (predicate_out[0]),
         .predicate_write_qualified (predicate_write_qualified[0]),
         .accumulator_value (lane0_accumulator)
@@ -302,6 +310,9 @@ module tt_um_bigmanraffa_clm (
         .lane_active (lane_active[1]),
 
         .laneid_mode (laneid_mode),
+
+        .targeted_write (targeted_write),
+        .lane_target (lane_target),
 
         .predicate_out (predicate_out[1]),
         .predicate_write_qualified (predicate_write_qualified[1]),
@@ -348,6 +359,9 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
+        .targeted_write (targeted_write),
+        .lane_target (lane_target),
+
         .predicate_out (predicate_out[2]),
         .predicate_write_qualified (predicate_write_qualified[2]),
         .accumulator_value (lane2_accumulator)
@@ -392,6 +406,9 @@ module tt_um_bigmanraffa_clm (
         .lane_active (lane_active[3]),
 
         .laneid_mode (laneid_mode),
+
+        .targeted_write (targeted_write),
+        .lane_target (lane_target),
 
         .predicate_out (predicate_out[3]),
         .predicate_write_qualified (predicate_write_qualified[3]),

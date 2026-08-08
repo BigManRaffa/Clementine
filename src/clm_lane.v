@@ -23,6 +23,9 @@ module clm_lane #(
     input wire swap_operands,
     input wire laneid_mode,
 
+    input wire targeted_write,
+    input wire [1:0] lane_target,
+
     input wire subtract_prepare,
     input wire prepare_zero,
     input wire select_accumulator,
@@ -54,7 +57,13 @@ module clm_lane #(
     wire qualified_accumulator_load;
     wire qualified_accumulator_mac_capture;
 
-    assign qualified_register_write = lane_commit & register_write_enable;
+wire lane_match;
+    assign lane_match = (lane_target == LANE_ID);
+
+    wire write_permitted;
+    assign write_permitted = (~targeted_write) | lane_match;
+
+    assign qualified_register_write = lane_commit & register_write_enable & write_permitted;
     assign qualified_accumulator_clear = lane_commit & accumulator_clear;
     assign qualified_accumulator_load = lane_commit & accumulator_load;
     assign qualified_accumulator_mac_capture = lane_commit & accumulator_mac_capture;

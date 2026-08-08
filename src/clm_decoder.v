@@ -43,15 +43,18 @@ module clm_decoder (
 
     output wire [1:0] writeback_select,
     output wire register_write_enable,
-    output wire predicate_write_enable
+    output wire predicate_write_enable,
+
+    output wire targeted_write,
+    output wire [1:0] lane_target
 );
 
     // sliced by format, a slice only matters under its own opcode, so overlaps dont clash
     assign rd_address = current_instruction[11:9];
     assign rs_address = current_instruction[8:6];
     assign rt_address = current_instruction[5:3];
-    assign immediate_value = current_instruction[8:1];
-    assign mask_target = current_instruction[3:0];
+    assign immediate_value[5:0] = current_instruction[6:1];
+    assign immediate_value[7:6] = current_instruction[8:7] & {2{~targeted_write}};
 
     wire field_sel;
     wire field_dir;
@@ -131,6 +134,12 @@ module clm_decoder (
     // 1010 bit[0]=0 -> MOV
     // 1010 bit[0]=1 -> LANEID
     assign laneid_mode = select_mov & current_instruction[0];
+    
+    // LDI bit[0]=1 -> targeted write. instruction[8:7] is the lane id,
+    // so the usable immediate narrows to 6 bits (0-63).
+    assign targeted_write = select_ldi & current_instruction[0];
+    assign lane_target = current_instruction[8:7];
+
     wire normal_mov = select_mov & (~laneid_mode);
     
     assign mov_from_even_bank = normal_mov & (~rs_address[0]);
