@@ -56,6 +56,8 @@ module clm_decoder (
     assign immediate_value[5:0] = current_instruction[6:1];
     assign immediate_value[7:6] = current_instruction[8:7] & {2{~targeted_write}};
 
+    assign mask_target = current_instruction[3:0];
+
     wire field_sel;
     wire field_dir;
     wire field_subop;
