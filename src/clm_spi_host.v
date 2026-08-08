@@ -80,10 +80,7 @@ module clm_spi_host (
     assign status_word[15:2] = 14'd0;
 
     wire [15:0] response_value;
-    assign response_value = (lane0_accumulator & {16{lane0_sel}})
-                          | (lane1_accumulator & {16{lane1_sel}})
-                          | (lane2_accumulator & {16{lane2_sel}})
-                          | (status_word       & {16{is_status}});
+    assign response_value = (lane0_accumulator & {16{lane0_sel}}) | (lane1_accumulator & {16{lane1_sel}}) | (lane2_accumulator & {16{lane2_sel}}) | (lane3_accumulator & {16{lane3_sel}}) | (status_word       & {16{is_status}});
 
     // one register both directions. no counter: cs frames the
     // transaction and the host owns the clock count.
