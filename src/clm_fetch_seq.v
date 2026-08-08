@@ -41,14 +41,52 @@ module clm_fetch_seq (
     localparam ST_NORMAL = 1'b0;
     localparam ST_REPLAY = 1'b1;
 
+    reg [15:0] slot0, slot2, slot4, slot6;
+    reg [15:0] slot1, slot3, slot5, slot7;
+
+    reg [2:0] write_pointer;
+
+    always @(posedge clk) begin
+        if (!rst_n) write_pointer <= 3'd0;
+        else if (go) write_pointer <= 3'd0;
+        else if (instruction_valid) write_pointer <= write_pointer + 3'd1;
+    end
+
+    wire wbank_even = ~write_pointer[0];
+    wire [1:0] wrow = write_pointer[2:1];
+
+    wire e0 = instruction_valid &  wbank_even & (wrow == 2'd0);
+    wire e2 = instruction_valid &  wbank_even & (wrow == 2'd1);
+    wire e4 = instruction_valid &  wbank_even & (wrow == 2'd2);
+    wire e6 = instruction_valid &  wbank_even & (wrow == 2'd3);
+    wire o1 = instruction_valid & ~wbank_even & (wrow == 2'd0);
+    wire o3 = instruction_valid & ~wbank_even & (wrow == 2'd1);
+    wire o5 = instruction_valid & ~wbank_even & (wrow == 2'd2);
+    wire o7 = instruction_valid & ~wbank_even & (wrow == 2'd3);
+
+    always @(posedge clk) begin
+        if (e0) slot0 <= instruction_in;
+        if (e2) slot2 <= instruction_in;
+        if (e4) slot4 <= instruction_in;
+        if (e6) slot6 <= instruction_in;
+        if (o1) slot1 <= instruction_in;
+        if (o3) slot3 <= instruction_in;
+        if (o5) slot5 <= instruction_in;
+        if (o7) slot7 <= instruction_in;
+    end
+
+    wire [1:0] rrow = logical_pc[2:1];
+
+    wire [15:0] even_data = rrow[1] ? (rrow[0] ? slot6 : slot4) : (rrow[0] ? slot2 : slot0);
+    wire [15:0] odd_data  = rrow[1] ? (rrow[0] ? slot7 : slot5) : (rrow[0] ? slot3 : slot1);
+
+    assign current_instruction = logical_pc[0] ? odd_data : even_data;
+
     // halted resets HIGH, machine powers up frozen. the current instruction
     // is the only stored word: 16 flops, not the old 256.
-    reg [15:0] instruction_register;
     reg [3:0] logical_pc;
     reg fsm_state;
     reg halted;
-
-    assign current_instruction = instruction_register;
 
     wire in_replay;
     assign in_replay = (fsm_state == ST_REPLAY);
@@ -69,13 +107,10 @@ module clm_fetch_seq (
     wire capture_event;
     assign capture_event = bank_conflict & (~scan_mode) & (~reconverge_bubble) & (~in_replay) & (~halted);
 
-    wire fresh;
-    assign fresh = instruction_valid;
-
-    assign instruction_commit = (~halted) & ( in_replay | (fresh & (else_boundary | ((~scan_mode) & (~capture_event) & (~reconverge_bubble)))) );
+    assign instruction_commit = (~halted) & (~instruction_valid) & ( in_replay | else_boundary | ((~scan_mode) & (~capture_event) & (~reconverge_bubble)) );
 
     wire scan_step;
-    assign scan_step = fresh & scan_mode & (~reconverge_bubble) & (~else_boundary);
+    assign scan_step = scan_mode & (~reconverge_bubble) & (~else_boundary);
 
     // skipped halt has commit low so it's ignored for free
     wire halt_event;
@@ -83,7 +118,7 @@ module clm_fetch_seq (
 
     assign operand_hold_load = capture_event;
     assign operand_hold_use = in_replay;
-    assign command_reconverge_pop = reconverge_bubble & fresh;
+    assign command_reconverge_pop = reconverge_bubble;
     assign done = halted;
 
     // replay flips the conflicted bank to rt's rows, the other side is a dont care
@@ -93,7 +128,7 @@ module clm_fetch_seq (
     assign conflict_bank_select = rs_address[0];
 
     wire execution_advance;
-    assign execution_advance = instruction_commit | scan_step;
+    assign execution_advance = (~instruction_valid) & (instruction_commit | scan_step);
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -121,12 +156,6 @@ module clm_fetch_seq (
             if (execution_advance) begin
                 logical_pc <= logical_pc + 4'h1;
             end
-        end
-    end
-
-    always @(posedge clk) begin
-        if (instruction_valid & (~in_replay)) begin
-            instruction_register <= instruction_in;
         end
     end
 
