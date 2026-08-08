@@ -20,8 +20,8 @@ module tt_um_bigmanraffa_clm (
     assign uio_out[1:0] = 2'b00;
 
     wire go;
-    wire instruction_shift_enable;
-    wire [15:0] instruction_shift_data;
+    wire instruction_valid;
+    wire [15:0] instruction_data;
 
     wire [15:0] current_instruction;
     wire replay_state;
@@ -101,6 +101,8 @@ module tt_um_bigmanraffa_clm (
         .clk (clk),
         .rst_n (rst_n),
 
+        .command (ui_in[2:0]),
+
         .spi_sclk (uio_in[3]),
         .spi_mosi (uio_in[1]),
         .spi_cs_n (uio_in[0]),
@@ -113,8 +115,8 @@ module tt_um_bigmanraffa_clm (
         .lane2_accumulator (lane2_accumulator),
         .lane3_accumulator (lane3_accumulator),
 
-        .instruction_shift_enable (instruction_shift_enable),
-        .instruction_shift_data (instruction_shift_data),
+        .instruction_valid (instruction_valid),
+        .instruction_data (instruction_data),
         .go (go)
     );
 
@@ -124,8 +126,8 @@ module tt_um_bigmanraffa_clm (
 
         .go (go),
 
-        .instruction_shift_enable (instruction_shift_enable),
-        .instruction_shift_data (instruction_shift_data),
+        .instruction_valid (instruction_valid),
+        .instruction_in (instruction_data),
 
         .rs_address (rs_address),
         .rt_address (rt_address),
@@ -397,7 +399,7 @@ module tt_um_bigmanraffa_clm (
     );
 
     // List all unused inputs to prevent warnings
-    wire _unused = &{ui_in, uio_in[7:4], uio_in[2], ena, uses_both_sources, 1'b0};
+    wire _unused = &{ui_in[7:3], uio_in[7:4], uio_in[2], ena, uses_both_sources, 1'b0};
 
 endmodule
 `default_nettype wire
