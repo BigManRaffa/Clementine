@@ -146,7 +146,6 @@ def LDAC(rs: int, high: int = 0) -> int:
 def IFP(else_pc: int) -> int:
     return (OP_IFP_ELSE << 12) | (0 << 4) | (else_pc & 0xF)
 
-
 def ELSE(endif_pc: int) -> int:
     return (OP_IFP_ELSE << 12) | (1 << 4) | (endif_pc & 0xF)
 
@@ -613,7 +612,6 @@ def _resolve_path(handle, dotted_path):
         handle = getattr(handle, piece)
     return handle
 
-
 _HIER_TARGETS = {
     "clm_decoder": (
         "decoder",
@@ -783,7 +781,6 @@ def hierarchy_test(target_name):
 
 decoder_DONTCARE = object()
 
-
 def decoder_expected_decoder(instr: int, replay: int):
     """Architectural golden model built from the ISA table.
 
@@ -878,10 +875,21 @@ def decoder_expected_decoder(instr: int, replay: int):
     elif op == OP_CLRACC:
         exp["accumulator_clear"] = 1
     elif op == OP_LDI:
-        # bit0=0 -> broadcast LDI; bit0=1 -> MOV_HOST. Both reuse the same
-        # arithmetic/write controls; host_mode changes only the lane-local
-        # data source from immediate_value to host_byte.
-        exp["host_mode"] = instr & 1
+        # ISA opcode 1001 has two architectural forms:
+        #   bit0=0 -> LDI rd, imm8       (broadcast immediate)
+        #   bit0=1 -> MOV_HOST rd        (per-lane staging byte)
+        # Derive host_mode from the ISA sub-operation, not from an RTL gate.
+        ldi_subop = instr & 1
+        if ldi_subop == 0:
+            exp["host_mode"] = 0
+            exp["immediate_value"] = imm
+        else:
+            exp["host_mode"] = 1
+            # MOV_HOST gets its architectural value from host_byte. Bits[8:1]
+            # are payload/don't-care for the value actually written.
+            exp["immediate_value"] = decoder_DONTCARE
+
+        # Both forms intentionally reuse the LDI write datapath.
         exp["select_immediate"] = 1
         exp["force_one_box2"] = 1
         exp["prepare_zero"] = 1
@@ -938,6 +946,31 @@ def decoder_check_signal(dut, name: str, expected, instr: int, replay: int):
             f"decoder mismatch: instr=0x{instr:04X} op=0x{op:X} replay={replay} "
             f"signal={name} expected={expected} got={got}"
         )
+
+@hierarchy_test("clm_decoder")
+async def decoder_ldi_mov_host_subop_architectural_contract(dut):
+    """ARCHITECTURE PROOF: opcode 1001 bit0 selects LDI vs MOV_HOST."""
+    cases = [
+        (LDI(3, 0x00), 0, 0x00),
+        (LDI(3, 0xFF), 0, 0xFF),
+        (MOV_HOST(3), 1, decoder_DONTCARE),
+        (MOV_HOST_RAW(3, 0xA5), 1, decoder_DONTCARE),
+    ]
+
+    for word, expected_host_mode, expected_imm in cases:
+        dut.current_instruction.value = word
+        dut.replay_state.value = 0
+        await Timer(1, unit="ns")
+
+        expected = decoder_expected_decoder(word, 0)
+        assert expected["host_mode"] == expected_host_mode
+        assert int(dut.host_mode.value) == expected_host_mode
+        assert int(dut.select_immediate.value) == 1
+        assert int(dut.register_write_enable.value) == 1
+        assert int(dut.rd_address.value) == 3
+
+        if expected_imm is not decoder_DONTCARE:
+            assert int(dut.immediate_value.value) == expected_imm
 
 @hierarchy_test("clm_decoder")
 async def exhaustive_decoder_architectural_contract(dut):
@@ -1403,13 +1436,11 @@ async def fetch_upload_image(dut, words):
         await fetch_upload_word(dut, word)
     await Timer(1, unit="ns")
 
-
 async def fetch_go(dut):
     dut.go.value = 1
     await fetch_edge(dut)
     dut.go.value = 0
     await Timer(1, unit="ns")
-
 
 def fetch_pc(dut):
     try:
@@ -1560,8 +1591,13 @@ async def cross_cutting_cycle_invariants(dut):
         assert instr_after == words[pc_after & 0x7]
 
 @hierarchy_test("clm_fetch_seq")
-async def bank_conflict_capture_replay_holds_pc_then_commits_once(dut):
-    """Prove the sequencer's two-cycle same-bank replay state machine."""
+async def impl_regression_bank_conflict_capture_replay_shape(dut):
+    """IMPLEMENTATION REGRESSION: preserve the current capture/replay FSM shape.
+
+    This intentionally checks mechanism (capture cycle then replay cycle), not
+    merely architectural correctness. A legal future FSM rewrite may require
+    updating/removing this test while the architecture-result tests stay valid.
+    """
     await fetch_start(dut)
 
     conflict_word = ADD(5, 1, 3)  # R1/R3 are both odd -> conflict
@@ -1598,6 +1634,10 @@ async def bank_conflict_capture_replay_holds_pc_then_commits_once(dut):
 
     dut.bank_conflict.value = 0
     dut.is_halt.value = 1
+    # These are combinational fetch inputs. Leave ReadOnly and allow a delta/time
+    # step before sampling instruction_commit, otherwise this assertion can see
+    # the previous bank_conflict/is_halt combination.
+    await Timer(1, unit="ns")
     assert int(dut.instruction_commit.value) == 1
     await fetch_edge(dut)
     assert int(dut.done.value) == 1
@@ -2187,7 +2227,6 @@ async def lane_clear_acc(dut, active: int = 1, commit: int = 1):
     await lane_stable_edge(dut)
     lane_inert(dut)
 
-
 async def lane_ldac_from_reg(dut, reg: int, high: int = 0, active: int = 1, commit: int = 1):
     lane_inert(dut)
     dut.lane_active.value = active
@@ -2203,7 +2242,6 @@ async def lane_ldac_from_reg(dut, reg: int, high: int = 0, active: int = 1, comm
     await Timer(1, unit="ns")
     await lane_stable_edge(dut)
     lane_inert(dut)
-
 
 async def lane_laneid_write(dut, reg: int, active: int = 1, commit: int = 1):
     """Drive exactly the controls emitted by decoder for LANEID."""
@@ -2350,12 +2388,13 @@ async def mov_host_lane_slice_exhaustive_8bit_mux_mask_commit_and_r0(dut):
     await lane_mov_host(dut, 0)
     assert await lane_read_reg(dut, 0) == 0
 
-
-
-
 @hierarchy_test("clm_lane")
-async def bank_conflict_operand_hold_replay_even_odd_r0_and_same_register(dut):
-    """Exercise the lane's operand_hold path on representative same-bank conflicts."""
+async def impl_regression_operand_hold_replay_even_odd_r0_and_same_register(dut):
+    """IMPLEMENTATION REGRESSION: preserve the current operand-hold replay path.
+
+    Architectural same-bank correctness is tested separately at full-chip level.
+    This test is allowed to fail after a legal microarchitectural replay rewrite.
+    """
     await lane_start(dut)
 
     seeds = {
@@ -2368,7 +2407,6 @@ async def bank_conflict_operand_hold_replay_even_odd_r0_and_same_register(dut):
     assert await lane_capture_replay_binary(dut, 2, 6, 4, "sub") == u8(0xC8 - 0x11)
     assert await lane_capture_replay_binary(dut, 0, 2, 5, "sub") == u8(0x00 - 0xC8)
     assert await lane_capture_replay_binary(dut, 3, 3, 2, "sub") == 0
-
 
 @hierarchy_test("clm_lane")
 async def laneid_lane0_path_mask_commit_and_r0_contract(dut):
@@ -2389,7 +2427,6 @@ async def laneid_lane0_path_mask_commit_and_r0_contract(dut):
     await lane_laneid_write(dut, 0)
     assert await lane_read_reg(dut, 0) == 0
 
-
 # ===========================================================================
 # TEST_SPI_HOST  (REAL HIERARCHY: core.spi_host)
 # MOV_HOST architecture: 011 = 32-clock distributed host-buffer load
@@ -2399,7 +2436,6 @@ async def spi_stable_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
     await Timer(1, unit="ns")
-
 
 async def spi_reset_spi(dut):
     await ensure_clock(dut, 20)
@@ -2418,10 +2454,8 @@ async def spi_reset_spi(dut):
     await ClockCycles(dut.clk, 4)
     await Timer(1, unit="ns")
 
-
 def spi_expected_status(done: int) -> int:
     return ((0 if done else 1) << 1) | (1 if done else 0)
-
 
 async def spi_record_pulse(dut, signal_name: str, stop, sample_name=None):
     sig = getattr(dut, signal_name)
@@ -2443,7 +2477,6 @@ async def spi_record_pulse(dut, signal_name: str, stop, sample_name=None):
         widths.append(current_width)
     return widths, high_samples
 
-
 async def spi_transact_with_pulse_record(
     spi,
     signal_name: str,
@@ -2462,7 +2495,6 @@ async def spi_transact_with_pulse_record(
     widths, samples = await monitor
     return rx, widths, samples
 
-
 async def spi_record_host_stream(dut, stop):
     """Capture the serial bit presented on every host_shift pulse."""
     bits = []
@@ -2480,7 +2512,6 @@ async def spi_record_host_stream(dut, stop):
     if current_width:
         pulse_widths.append(current_width)
     return pulse_widths, bits
-
 
 @hierarchy_test("clm_spi_host")
 async def reset_synchronizers_and_no_phantom_edges(dut):
@@ -2515,7 +2546,6 @@ async def reset_synchronizers_and_no_phantom_edges(dut):
     assert int(dut.go.value) == 0
     assert int(dut.instruction_valid.value) == 0
 
-
 @hierarchy_test("clm_spi_host")
 async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumulator_reads(dut):
     """Retain the ordinary 16-clock SPI regression around the new command."""
@@ -2547,7 +2577,6 @@ async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumula
     assert await spi.transaction(SPI_CMD_STATUS, 0) == spi_expected_status(done=0)
     assert await spi.transaction(SPI_CMD_ACC2, 0) == 0x1357
 
-
 @hierarchy_test("clm_spi_host")
 async def exec_frames_all_data_patterns_and_pulses_instruction_valid_once(dut):
     await spi_reset_spi(dut)
@@ -2571,7 +2600,6 @@ async def exec_frames_all_data_patterns_and_pulses_instruction_valid_once(dut):
         assert samples == [word]
         assert int(dut.go.value) == 0
         assert int(dut.host_shift.value) == 0
-
 
 @hierarchy_test("clm_spi_host")
 async def buffer_command_exact_32_host_shift_bits_and_no_exec_or_go(dut):
@@ -2609,7 +2637,6 @@ async def buffer_command_exact_32_host_shift_bits_and_no_exec_or_go(dut):
         assert int(dut.instruction_valid.value) == 0
         assert int(dut.go.value) == 0
 
-
 @hierarchy_test("clm_spi_host")
 async def buffer_command_latches_for_whole_frame_and_ignores_instruction_register_shift(dut):
     """Changing ui_in command after CS falls cannot turn BUFFER into EXEC."""
@@ -2639,7 +2666,6 @@ async def buffer_command_latches_for_whole_frame_and_ignores_instruction_registe
     assert widths == [1] * 32
     assert int(dut.instruction_valid.value) == 0
     assert int(dut.go.value) == 0
-
 
 @hierarchy_test("clm_spi_host")
 async def all_eight_sideband_commands_and_back_to_back_frames(dut):
@@ -2687,9 +2713,8 @@ async def all_eight_sideband_commands_and_back_to_back_frames(dut):
         )
         assert widths == [1] and samples == [word]
 
-
 # ===========================================================================
-# TEST_TOP
+# TEST_TOP  (FIXED TINY TAPEOUT TOPLEVEL=tb)
 # ===========================================================================
 
 def top_core_handle(dut):
@@ -2726,7 +2751,6 @@ async def mov_host_top_reset(dut):
     assert (int(dut.uo_out.value) & 1) == 1
     return spi
 
-
 @dataclass
 class KernelRunObservation:
     saw_go: bool
@@ -2736,13 +2760,12 @@ class KernelRunObservation:
     pc_holds_while_active: int
     final_pc: Optional[int]
 
-
-async def _monitor_real_go_run(dut, timeout_cycles=64, pre_go_timeout_cycles=512):
+async def _monitor_real_go_run(dut, execution_timeout_cycles=64, go_timeout_cycles=512):
     """Require a real GO pulse and DONE high->low->high transition.
 
     GO is emitted on synchronized CS rising, after the normal 16-clock SPI data
     phase. At 5 MHz that is ~160 core cycles, so the pre-GO wait has its own
-    larger budget. timeout_cycles applies only after GO has actually appeared.
+    larger budget. execution_timeout_cycles applies only after GO has actually appeared.
     """
     core = top_core_handle(dut)
     saw_go = False
@@ -2769,7 +2792,7 @@ async def _monitor_real_go_run(dut, timeout_cycles=64, pre_go_timeout_cycles=512
             pre_go_cycles += 1
             if go_now:
                 saw_go = True
-            elif pre_go_cycles >= pre_go_timeout_cycles:
+            elif pre_go_cycles >= go_timeout_cycles:
                 raise AssertionError("GO pulse was never observed")
 
         if saw_go and not done:
@@ -2789,9 +2812,9 @@ async def _monitor_real_go_run(dut, timeout_cycles=64, pre_go_timeout_cycles=512
                 pc_holds += 1
             prev_pc = pc
 
-            if cycles_active > timeout_cycles:
+            if cycles_active > execution_timeout_cycles:
                 raise AssertionError(
-                    f"kernel stayed active longer than {timeout_cycles} core cycles"
+                    f"kernel stayed active longer than {execution_timeout_cycles} core cycles"
                 )
 
         if saw_active and done:
@@ -2804,17 +2827,24 @@ async def _monitor_real_go_run(dut, timeout_cycles=64, pre_go_timeout_cycles=512
                 final_pc=pc,
             )
 
-
 async def mov_host_go_and_wait_halt(
     dut,
     spi,
-    timeout_cycles=64,
+    execution_timeout_cycles=64,
+    go_timeout_cycles=512,
     expected_final_pc=None,
     require_replay=False,
 ):
-    # The monitor starts BEFORE GO. A short kernel can start and finish before
-    # spi.transaction() returns from its post-CS synchronization delay.
-    monitor = cocotb.start_soon(_monitor_real_go_run(dut, timeout_cycles))
+    # The monitor starts BEFORE GO. At 5 MHz the 16-clock GO SPI frame alone is
+    # about 160 core clocks, so GO detection has a separate large timeout. The
+    # shorter execution timeout begins only after the actual GO pulse is seen.
+    monitor = cocotb.start_soon(
+        _monitor_real_go_run(
+            dut,
+            execution_timeout_cycles=execution_timeout_cycles,
+            go_timeout_cycles=go_timeout_cycles,
+        )
+    )
     await Timer(1, unit="ns")
     await spi.transaction(SPI_CMD_GO, 0)
     observation = await monitor
@@ -2826,10 +2856,11 @@ async def mov_host_go_and_wait_halt(
             f"final logical PC expected {expected_final_pc}, got {observation.final_pc}"
         )
     if require_replay:
-        assert observation.replay_samples >= 1, "bank-conflict run never entered replay"
-        assert observation.pc_holds_while_active >= 1, "capture/replay never held logical PC"
+        # IMPLEMENTATION REGRESSION ONLY. Architectural correctness does not
+        # require a particular replay-state encoding or visible PC-hold shape.
+        assert observation.replay_samples >= 1, "bank-conflict run never entered current replay mechanism"
+        assert observation.pc_holds_while_active >= 1, "current capture/replay mechanism never held logical PC"
     return observation
-
 
 def core_host_bytes(core):
     return [
@@ -2839,15 +2870,11 @@ def core_host_bytes(core):
         int(core.lane3.host_byte.value),
     ]
 
-
-
-
 def _lane_gpr_value(core, lane: int, reg: int) -> int:
     if reg == 0:
         return 0
     rf = getattr(core, f"lane{lane}").lane_regfile
     return int(getattr(rf, f"reg_r{reg}").value)
-
 
 @cocotb.test()
 async def laneid_all_four_lanes_end_to_end(dut):
@@ -2869,10 +2896,13 @@ async def laneid_all_four_lanes_end_to_end(dut):
     finally:
         stop_test_clock()
 
-
 @cocotb.test()
-async def bank_conflict_replay_full_chip_mov_host_sub(dut):
-    """Integrate fetch capture/replay, lane operand_hold and one committed result."""
+async def impl_regression_bank_conflict_replay_full_chip_shape(dut):
+    """IMPLEMENTATION REGRESSION: current full-chip replay mechanism is visible.
+
+    The architectural same-bank SUB result is proven in a separate test that
+    does not require replay_state or a PC hold.
+    """
     try:
         spi = await mov_host_top_reset(dut)
         core = top_core_handle(dut)
@@ -2891,6 +2921,8 @@ async def bank_conflict_replay_full_chip_mov_host_sub(dut):
             HALT(),
         ])
         await spi_load_kernel(spi, kernel)
+        # IMPLEMENTATION REGRESSION: unlike the architecture-only sibling test,
+        # this intentionally requires the current replay mechanism to appear.
         obs = await mov_host_go_and_wait_halt(
             dut,
             spi,
@@ -2909,6 +2941,91 @@ async def bank_conflict_replay_full_chip_mov_host_sub(dut):
     finally:
         stop_test_clock()
 
+@cocotb.test()
+async def bank_conflict_same_bank_sub_architectural_result(dut):
+    """ARCHITECTURE PROOF: same-bank SUB retires once with the correct lane results.
+
+    This deliberately does NOT assert replay_state, operand_hold, PC-hold count,
+    or the number of internal cycles. Any legal implementation may satisfy it.
+    """
+    try:
+        spi = await mov_host_top_reset(dut)
+        core = top_core_handle(dut)
+
+        a = [0x21, 0x80, 0x05, 0xFF]
+        b = [0x03, 0x7F, 0x09, 0x01]
+
+        await spi.load_host_buffer(a)
+        await spi_load_kernel(spi, exact_kernel([MOV_HOST(1), HALT()]))
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=2)
+
+        await spi.load_host_buffer(b)
+        await spi_load_kernel(spi, exact_kernel([
+            MOV_HOST(3),
+            SUB(5, 1, 3),   # R1/R3 are same-bank by the architectural register map
+            HALT(),
+        ]))
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=3)
+
+        expected = [u8(x - y) for x, y in zip(a, b)]
+        got = [_lane_gpr_value(core, lane, 5) for lane in range(4)]
+        assert got == expected, f"same-bank SUB expected {expected}, got {got}"
+    finally:
+        stop_test_clock()
+
+@cocotb.test()
+async def simt_ifp_else_reconvergence_architectural_kernel(dut):
+    """ARCHITECTURE PROOF: real lanes take different IFP/ELSE paths and reconverge.
+
+    Kernel (all 8 static slots):
+      0 LANEID R1
+      1 LDI    R2, 2
+      2 CMP.LT R1, R2          -> lanes 0/1 true, lanes 2/3 false
+      3 IFP    5               -> ELSE boundary is PC 5
+      4 LDI    R3, 0x11        -> true side only
+      5 ELSE   7               -> reconverge boundary is PC 7
+      6 LDI    R3, 0x22        -> false side only
+      7 HALT                    -> executes after architectural reconvergence
+
+    Only final architectural register state and successful halt are asserted;
+    no stack encoding, bubble count, mask waveform, or PC-hold mechanism is part
+    of this proof.
+    """
+    try:
+        spi = await mov_host_top_reset(dut)
+        core = top_core_handle(dut)
+
+        kernel = exact_kernel([
+            LANEID(1),
+            LDI(2, 2),
+            CMP(0b00, 1, 2),   # signed LT
+            IFP(5),
+            LDI(3, 0x11),
+            ELSE(7),
+            LDI(3, 0x22),
+            HALT(),
+        ])
+
+        await spi_load_kernel(spi, kernel)
+        await mov_host_go_and_wait_halt(
+            dut,
+            spi,
+            execution_timeout_cycles=64,
+            go_timeout_cycles=512,
+            expected_final_pc=8,
+        )
+
+        got = [_lane_gpr_value(core, lane, 3) for lane in range(4)]
+        assert got == [0x11, 0x11, 0x22, 0x22], (
+            f"IFP/ELSE lane split expected [17,17,34,34], got {got}"
+        )
+
+        # All lanes must be active again after the reconvergence boundary and HALT.
+        # This is architectural post-state, not a check of how reconvergence was
+        # implemented internally.
+        assert int(core.lane_active.value) == 0b1111
+    finally:
+        stop_test_clock()
 
 @cocotb.test()
 async def mov_host_real_chain_lane0_first_order_full_overwrite_and_no_fetch_write(dut):
@@ -2934,7 +3051,6 @@ async def mov_host_real_chain_lane0_first_order_full_overwrite_and_no_fetch_writ
         assert int(core.instruction_valid.value) == 0
     finally:
         stop_test_clock()
-
 
 @cocotb.test()
 async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
@@ -2975,7 +3091,6 @@ async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
     finally:
         stop_test_clock()
 
-
 @cocotb.test()
 async def mov_host_four_arbitrary_lane_bytes_two_sources_add_end_to_end(dut):
     """Stage two independent 4-byte vectors and perform real four-lane ADD."""
@@ -3014,7 +3129,6 @@ async def mov_host_four_arbitrary_lane_bytes_two_sources_add_end_to_end(dut):
     finally:
         stop_test_clock()
 
-
 @cocotb.test()
 async def mov_host_buffer_persists_and_can_feed_multiple_registers_without_reload(dut):
     """MOV_HOST reads staging state; it does not consume or clear the buffer."""
@@ -3039,7 +3153,6 @@ async def mov_host_buffer_persists_and_can_feed_multiple_registers_without_reloa
         assert got == expected
     finally:
         stop_test_clock()
-
 
 @cocotb.test()
 async def normal_ldi_broadcast_full_8bit_ignores_staged_host_bytes(dut):
