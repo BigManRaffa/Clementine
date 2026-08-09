@@ -127,7 +127,7 @@ module tt_um_bigmanraffa_clm (
         .go (go)
 
         .host_shift (host_shift),
-        .host_serial_out (host_from_spi),
+        .host_serial_out (host_from_spi)
     );
 
     clm_fetch_seq fetch_seq (
@@ -273,7 +273,7 @@ module tt_um_bigmanraffa_clm (
         .host_mode (host_mode), (targeted_write),
         .host_serial_in (host_chain_1_to_0),
         .host_serial_out (),
-        
+
         .predicate_out (predicate_out[0]),
         .predicate_write_qualified (predicate_write_qualified[0]),
         .accumulator_value (lane0_accumulator)
