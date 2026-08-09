@@ -7,7 +7,6 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge, Timer
 from cocotb.handle import Deposit, Force, Release
 
-
 # ---------------------------------------------------------------------------
 # Integer helpers
 # ---------------------------------------------------------------------------
@@ -121,8 +120,32 @@ def CLRACC() -> int:
 
 
 def LDI(rd: int, imm8: int) -> int:
-    # bit 0 is deliberately kept zero.
-    return (OP_LDI << 12) | ((rd & 7) << 9) | ((imm8 & 0xFF) << 1)
+    # Normal broadcast LDI. bit[0]=0 keeps the old 8-bit immediate format.
+    if not 0 <= rd < 8:
+        raise ValueError("LDI rd must be 0..7")
+    if not 0 <= imm8 < 256:
+        raise ValueError("LDI immediate must be 0..255")
+    return (OP_LDI << 12) | (rd << 9) | (imm8 << 1)
+
+
+def MOV_HOST(rd: int) -> int:
+    """Canonical MOV_HOST encoding: opcode 1001, bit[0]=1, payload bits zero."""
+    if not 0 <= rd < 8:
+        raise ValueError("MOV_HOST rd must be 0..7")
+    return (OP_LDI << 12) | (rd << 9) | 1
+
+
+def MOV_HOST_RAW(rd: int, ignored_payload: int) -> int:
+    """MOV_HOST with deliberate junk in instruction[8:1].
+
+    The architecture defines bit[0]=1 as host mode, so payload[8:1] must not
+    affect the value written by the lanes.  This helper is for verification.
+    """
+    if not 0 <= rd < 8:
+        raise ValueError("MOV_HOST rd must be 0..7")
+    if not 0 <= ignored_payload < 256:
+        raise ValueError("MOV_HOST payload must be 0..255")
+    return (OP_LDI << 12) | (rd << 9) | (ignored_payload << 1) | 1
 
 
 def MOV(rd: int, rs: int) -> int:
@@ -160,26 +183,25 @@ def HALT() -> int:
 
 
 def pad_kernel(words: Sequence[int]) -> List[int]:
-    """Return exactly 16 words with HALT in slot 15.
+    """Legacy helper name; the addressed buffer does NOT need padding.
 
-    Input may either already contain a HALT as its final semantic instruction or
-    omit it.  The source HALT is treated as an end marker and physically placed
-    in slot 15, matching the assembler contract.
+    Append HALT if omitted and require the resulting static image to fit 8 slots.
     """
-    body = list(words)
-    if body and ((body[-1] >> 12) & 0xF) == OP_HALT:
-        body = body[:-1]
-    if len(body) > 15:
-        raise ValueError("kernel body exceeds 15 words before HALT")
-    return [u16(x) for x in body] + [NOP()] * (15 - len(body)) + [HALT()]
+    body = [u16(x) for x in words]
+    if not body or ((body[-1] >> 12) & 0xF) != OP_HALT:
+        body.append(HALT())
+    if len(body) > 8:
+        raise ValueError(f"kernel needs {len(body)} words; addressed buffer has 8 slots")
+    return body
 
 
 def exact_kernel(words: Sequence[int]) -> List[int]:
-    if len(words) != 16:
-        raise ValueError(f"expected exactly 16 words, got {len(words)}")
-    if ((words[15] >> 12) & 0xF) != OP_HALT:
-        raise ValueError("slot 15 must be HALT")
-    return [u16(x) for x in words]
+    body = [u16(x) for x in words]
+    if not (1 <= len(body) <= 8):
+        raise ValueError(f"expected 1..8 words, got {len(body)}")
+    if ((body[-1] >> 12) & 0xF) != OP_HALT:
+        raise ValueError("final semantic instruction must be HALT")
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -284,18 +306,21 @@ def exhaustive_values() -> Iterable[int]:
 
 
 # ---------------------------------------------------------------------------
-# SPI master.  It models the external master, not internal slave timing.
-# SPI mode 0, 3 command bits + 16 data bits, MSB first, one CS assertion.
+# SPI master for the NEW compact host.
+#
+# command[2:0] is NOT shifted over MOSI anymore. The host presents command
+# before CS falls. The SPI frame itself is the 16-bit data phase, MSB first.
+# CS is the frame boundary; there is no on-chip transaction counter.
 # ---------------------------------------------------------------------------
 
-SPI_CMD_LOAD = 0b000
-SPI_CMD_GO = 0b001
+SPI_CMD_EXEC   = 0b000
+SPI_CMD_GO     = 0b001
 SPI_CMD_STATUS = 0b010
-SPI_CMD_NOP = 0b011
-SPI_CMD_ACC0 = 0b100
-SPI_CMD_ACC1 = 0b101
-SPI_CMD_ACC2 = 0b110
-SPI_CMD_ACC3 = 0b111
+SPI_CMD_BUFFER = 0b011
+SPI_CMD_ACC0   = 0b100
+SPI_CMD_ACC1   = 0b101
+SPI_CMD_ACC2   = 0b110
+SPI_CMD_ACC3   = 0b111
 
 
 class SpiMaster:
@@ -303,29 +328,38 @@ class SpiMaster:
         self.dut = dut
         self.top_level = top_level
         self._uio = 0
+        self._ui = 0
 
-    def _drive_top_bit(self, idx: int, val: int):
+    def _drive_top_uio_bit(self, idx: int, val: int):
         if val:
             self._uio |= 1 << idx
         else:
             self._uio &= ~(1 << idx)
         self.dut.uio_in.value = self._uio
 
+    def set_command(self, command: int):
+        command &= 0x7
+        if self.top_level:
+            self._ui = (self._ui & ~0x7) | command
+            self.dut.ui_in.value = self._ui
+        else:
+            self.dut.command.value = command
+
     def set_cs(self, val: int):
         if self.top_level:
-            self._drive_top_bit(0, val)
+            self._drive_top_uio_bit(0, val)
         else:
             self.dut.spi_cs_n.value = val
 
     def set_mosi(self, val: int):
         if self.top_level:
-            self._drive_top_bit(1, val)
+            self._drive_top_uio_bit(1, val)
         else:
             self.dut.spi_mosi.value = val
 
     def set_sclk(self, val: int):
         if self.top_level:
-            self._drive_top_bit(3, val)
+            self._drive_top_uio_bit(3, val)
         else:
             self.dut.spi_sclk.value = val
 
@@ -340,55 +374,66 @@ class SpiMaster:
         self.set_cs(1)
         await ClockCycles(self.dut.clk, core_cycles)
 
-    async def transaction(
+    async def _clock_bits(
         self,
-        command: int,
-        tx_word: int = 0,
-        spi_hz: int = 5_000_000,
-        phase_offset_ns: int = 0,
-    ) -> int:
-        if not (0 <= command < 8):
-            raise ValueError(command)
+        bits: Sequence[int],
+        spi_hz: int,
+        sample_miso: bool = True,
+    ) -> List[int]:
         if spi_hz <= 0:
             raise ValueError(spi_hz)
         half_ns = 1e9 / (2.0 * spi_hz)
         if half_ns < 1:
             raise ValueError("SPI helper requires >=1 ns half-period")
 
+        rx_bits: List[int] = []
+        sample_delay = min(10.0, half_ns / 4.0)
+        high_remainder = half_ns - sample_delay
+
+        for out_bit in bits:
+            self.set_mosi(int(out_bit) & 1)
+            await Timer(half_ns, unit="ns")
+            self.set_sclk(1)
+            await Timer(sample_delay, unit="ns")
+            if sample_miso:
+                rx_bits.append(self.get_miso())
+            if high_remainder > 0:
+                await Timer(high_remainder, unit="ns")
+            self.set_sclk(0)
+
+        return rx_bits
+
+    async def transaction(
+        self,
+        command: int,
+        tx_word: int = 0,
+        spi_hz: int = 5_000_000,
+        phase_offset_ns: int = 0,
+        command_change_after_cs: Optional[int] = None,
+    ) -> int:
+        if not (0 <= command < 8):
+            raise ValueError(command)
+
+        self.set_command(command)
         self.set_sclk(0)
         self.set_mosi(0)
         self.set_cs(1)
         if phase_offset_ns:
             await Timer(phase_offset_ns, unit="ns")
 
+        # Sideband command is stable before CS falls.
+        await ClockCycles(self.dut.clk, 2)
         self.set_cs(0)
-        # Let the three-stage CS synchronizer observe a clean falling edge.
         await ClockCycles(self.dut.clk, 4)
 
-        bits = [((command >> n) & 1) for n in (2, 1, 0)]
-        bits += [((tx_word >> n) & 1) for n in range(15, -1, -1)]
-        rx_bits: List[int] = []
+        if command_change_after_cs is not None:
+            self.set_command(command_change_after_cs)
+            await ClockCycles(self.dut.clk, 1)
 
-        sample_delay = min(10.0, half_ns / 4.0)
-        high_remainder = half_ns - sample_delay
+        bits = [((tx_word >> n) & 1) for n in range(15, -1, -1)]
+        rx_bits = await self._clock_bits(bits, spi_hz, sample_miso=True)
 
-        for i, out_bit in enumerate(bits):
-            # Mode 0: data becomes stable while SCLK is low.
-            self.set_mosi(out_bit)
-            await Timer(half_ns, unit="ns")
-            self.set_sclk(1)
-            await Timer(sample_delay, unit="ns")
-
-            # The first three returned bits are command-phase don't-cares.
-            if i >= 3:
-                rx_bits.append(self.get_miso())
-
-            if high_remainder > 0:
-                await Timer(high_remainder, unit="ns")
-            self.set_sclk(0)
-
-        # A proper frame keeps CS low through the final falling edge and gives
-        # the core-domain edge detector time to consume the final rising edge.
+        half_ns = 1e9 / (2.0 * spi_hz)
         await Timer(half_ns, unit="ns")
         self.set_cs(1)
         self.set_mosi(0)
@@ -399,69 +444,120 @@ class SpiMaster:
             rx = (rx << 1) | b
         return rx
 
-    async def command_only(
+    async def raw_frame(
         self,
         command: int,
+        data_bits: Sequence[int],
         spi_hz: int = 5_000_000,
         phase_offset_ns: int = 0,
-    ):
-        """Send exactly the 3 command bits, including the falling boundary.
+        command_change_after_cs: Optional[int] = None,
+        sample_miso: bool = False,
+    ) -> List[int]:
+        """Send an arbitrary-length CS-framed data phase.
 
-        This is intentionally protocol-short and is used only to verify the
-        specified GO exception: GO is allowed to fire at the command/data
-        boundary before the nominal 16 dummy data clocks.
+        Normal transactions are 16 clocks. BUFFER (011) intentionally uses
+        32 clocks because the host staging chain is four 8-bit lane slices.
         """
-        half_ns = 1e9 / (2.0 * spi_hz)
+        if not (0 <= command < 8):
+            raise ValueError(command)
+        if spi_hz <= 0:
+            raise ValueError(spi_hz)
+
+        self.set_command(command)
         self.set_sclk(0)
         self.set_mosi(0)
         self.set_cs(1)
+
         if phase_offset_ns:
             await Timer(phase_offset_ns, unit="ns")
+
+        # Sideband command must be stable before CS falls.
+        await ClockCycles(self.dut.clk, 2)
+        self.set_cs(0)
+        # Let the synchronized CS falling edge latch command[2:0].
+        await ClockCycles(self.dut.clk, 4)
+
+        if command_change_after_cs is not None:
+            self.set_command(command_change_after_cs)
+            await ClockCycles(self.dut.clk, 1)
+
+        rx_bits = await self._clock_bits(
+            data_bits, spi_hz, sample_miso=sample_miso
+        )
+
+        half_ns = 1e9 / (2.0 * spi_hz)
+        await Timer(half_ns, unit="ns")
+        self.set_cs(1)
+        self.set_mosi(0)
+        await ClockCycles(self.dut.clk, 5)
+        return rx_bits
+
+    async def load_host_buffer(
+        self,
+        lane_bytes: Sequence[int],
+        spi_hz: int = 5_000_000,
+        phase_offset_ns: int = 0,
+        command_change_after_cs: Optional[int] = None,
+    ):
+        """Load [lane0,lane1,lane2,lane3], lane0 byte first, MSB first."""
+        if len(lane_bytes) != 4:
+            raise ValueError("host buffer requires exactly four lane bytes")
+
+        bits = []
+        for value in lane_bytes:
+            value = int(value)
+            if not 0 <= value < 256:
+                raise ValueError("host buffer bytes must be 0..255")
+            bits.extend((value >> n) & 1 for n in range(7, -1, -1))
+
+        await self.raw_frame(
+            SPI_CMD_BUFFER,
+            bits,
+            spi_hz=spi_hz,
+            phase_offset_ns=phase_offset_ns,
+            command_change_after_cs=command_change_after_cs,
+            sample_miso=False,
+        )
+
+
+    async def short_frame(
+        self,
+        command: int,
+        data_bits: Sequence[int],
+        spi_hz: int = 5_000_000,
+    ):
+        """Characterize the counterless CS-framed implementation.
+
+        Short frames are outside the MCU protocol; the valid host frame is
+        still 16 data clocks. The RTL intentionally has no length guard.
+        """
+        if not (0 <= command < 8):
+            raise ValueError(command)
+        if len(data_bits) >= 16:
+            raise ValueError("short_frame expects fewer than 16 bits")
+
+        self.set_command(command)
+        self.set_sclk(0)
+        self.set_mosi(0)
+        self.set_cs(1)
+        await ClockCycles(self.dut.clk, 2)
         self.set_cs(0)
         await ClockCycles(self.dut.clk, 4)
-        for n in (2, 1, 0):
-            self.set_mosi((command >> n) & 1)
-            await Timer(half_ns, unit="ns")
-            self.set_sclk(1)
-            await Timer(half_ns, unit="ns")
-            self.set_sclk(0)
-        # Give the synchronized falling edge after command bit 0 time to become
-        # at_phase_boundary, then abort the nominal data phase.
-        await ClockCycles(self.dut.clk, 4)
+
+        await self._clock_bits(data_bits, spi_hz, sample_miso=False)
+
+        half_ns = 1e9 / (2.0 * spi_hz)
+        await Timer(half_ns, unit="ns")
         self.set_cs(1)
         self.set_mosi(0)
         await ClockCycles(self.dut.clk, 5)
 
-    async def partial_load(
-        self,
-        data_bits: Sequence[int],
-        spi_hz: int = 5_000_000,
-    ):
-        """Send LOAD plus fewer than 16 data bits and then raise CS."""
-        if len(data_bits) >= 16:
-            raise ValueError("partial_load expects fewer than 16 data bits")
-        half_ns = 1e9 / (2.0 * spi_hz)
-        self.set_sclk(0)
-        self.set_mosi(0)
-        self.set_cs(0)
-        await ClockCycles(self.dut.clk, 4)
-        stream = [0, 0, 0] + [int(x) & 1 for x in data_bits]
-        for b in stream:
-            self.set_mosi(b)
-            await Timer(half_ns, unit="ns")
-            self.set_sclk(1)
-            await Timer(half_ns, unit="ns")
-            self.set_sclk(0)
-        await Timer(half_ns, unit="ns")
-        self.set_cs(1)
-        await ClockCycles(self.dut.clk, 6)
-
 
 async def spi_load_kernel(spi: SpiMaster, words: Sequence[int], spi_hz: int = 5_000_000):
-    if len(words) != 16:
-        raise ValueError("Clementine kernel image is exactly 16 words")
+    if not (1 <= len(words) <= 8):
+        raise ValueError("Clementine addressed-buffer kernel is 1..8 words")
     for word in words:
-        await spi.transaction(SPI_CMD_LOAD, word, spi_hz=spi_hz)
+        await spi.transaction(SPI_CMD_EXEC, word, spi_hz=spi_hz)
 
 
 async def spi_read_status(spi: SpiMaster, spi_hz: int = 5_000_000) -> int:
@@ -652,10 +748,10 @@ class _DecoderHierarchyDut(_HierarchyDut):
         super().__init__(root, target, force_inputs, forced_registry)
         fetch = _core(root).fetch_seq
         try:
-            self._instruction_source = fetch.instruction_ring[0]
+            self._instruction_source = fetch.slot0
         except Exception as exc:
             raise AssertionError(
-                "Icarus did not expose fetch_seq.instruction_ring[0]; decoder exhaustive test cannot be driven"
+                "Icarus did not expose fetch_seq.slot0; decoder exhaustive test cannot be driven"
             ) from exc
         self._replay_source = fetch.fsm_state
 
@@ -701,7 +797,7 @@ _HIER_TARGETS = {
         "fetch_seq",
         {
             "go",
-            "instruction_shift_enable", "instruction_shift_data",
+            "instruction_valid", "instruction_in",
             "rs_address", "rt_address", "bank_conflict", "is_halt",
             "any_lane_active",
             "stack_top_valid", "stack_top_type", "stack_top_target",
@@ -736,6 +832,7 @@ _HIER_TARGETS = {
             "predicate_write_enable",
             "select_immediate", "force_one_box1", "force_one_box2",
             "swap_operands", "laneid_mode",
+            "host_mode", "host_shift", "host_serial_in",
             "subtract_prepare", "prepare_zero", "select_accumulator",
             "shift_direction", "bitwise_select", "condition_select",
             "accumulator_clear", "accumulator_load",
@@ -747,6 +844,7 @@ _HIER_TARGETS = {
     "clm_spi_host": (
         "spi_host",
         {
+            "command",
             "spi_sclk", "spi_mosi", "spi_cs_n",
             "sequencer_done",
             "lane0_accumulator", "lane1_accumulator",
@@ -1350,14 +1448,15 @@ async def commands_work_even_with_zero_active_mask(dut):
 
 # ===========================================================================
 # TEST_FETCH_SEQ  (REAL HIERARCHY: core.fetch_seq)
+# NEW: 8-entry static addressed instruction buffer
 # ===========================================================================
 
 async def fetch_start(dut):
     await ensure_clock(dut, 20)
     dut.rst_n.value = 0
     dut.go.value = 0
-    dut.instruction_shift_enable.value = 0
-    dut.instruction_shift_data.value = 0
+    dut.instruction_valid.value = 0
+    dut.instruction_in.value = 0
     dut.rs_address.value = 0
     dut.rt_address.value = 1
     dut.bank_conflict.value = 0
@@ -1381,16 +1480,18 @@ async def fetch_edge(dut):
 
 
 async def fetch_upload_word(dut, word: int):
-    dut.instruction_shift_data.value = word & 0xFFFF
-    dut.instruction_shift_enable.value = 1
+    dut.instruction_in.value = word & 0xFFFF
+    dut.instruction_valid.value = 1
     await fetch_edge(dut)
-    dut.instruction_shift_enable.value = 0
+    dut.instruction_valid.value = 0
+    await Timer(1, unit="ns")
 
 
 async def fetch_upload_image(dut, words):
-    assert len(words) == 16
-    for w in words:
-        await fetch_upload_word(dut, w)
+    if not (1 <= len(words) <= 8):
+        raise AssertionError("addressed instruction buffer accepts 1..8 words")
+    for word in words:
+        await fetch_upload_word(dut, word)
     await Timer(1, unit="ns")
 
 
@@ -1410,79 +1511,104 @@ def fetch_pc(dut):
 
 @hierarchy_test("clm_fetch_seq")
 async def reset_upload_order_and_warm_restart_contract(dut):
+    """8 static slots, short kernels, HALT anywhere, bare-GO rerun."""
     await fetch_start(dut)
+
     assert int(dut.done.value) == 1
     assert int(dut.replay_state.value) == 0
+    assert int(dut.instruction_commit.value) == 0
     if fetch_pc(dut) is not None:
         assert fetch_pc(dut) == 0
-    assert int(dut.instruction_commit.value) == 0
 
-    words = [0x1000 + i for i in range(15)] + [0xF000]
-    await fetch_upload_image(dut, words)
-    assert int(dut.current_instruction.value) == words[0]
-    assert int(dut.done.value) == 1
+    full_words = [0x1101, 0x2202, 0x3303, 0x4404,
+                  0x5505, 0x6606, 0x7707, 0x8808]
+    await fetch_upload_image(dut, full_words)
 
-    # A partial replacement is deliberately just a physical shift; there is no
-    # length guard or auto-correction in the sequencer.
-    await fetch_upload_word(dut, 0xBEEF)
-    assert int(dut.current_instruction.value) == words[1]
+    try:
+        assert int(dut.write_pointer.value) == 0
+    except AttributeError:
+        pass
 
-    # Reload a clean complete image for execution.
-    await fetch_upload_image(dut, words)
-    assert int(dut.current_instruction.value) == words[0]
+    assert int(dut.current_instruction.value) == full_words[0]
 
     await fetch_go(dut)
     assert int(dut.done.value) == 0
-    assert int(dut.replay_state.value) == 0
-    if fetch_pc(dut) is not None:
-        assert fetch_pc(dut) == 0
+    assert int(dut.current_instruction.value) == full_words[0]
 
-    # Straight-line 16-word run.  HALT is commit-qualified only on the final
-    # word.  The HALT edge itself performs the 16th physical rotation.
-    for i in range(16):
-        dut.is_halt.value = int(i == 15)
-        assert int(dut.current_instruction.value) == words[i]
+    # Walk all eight static addresses. Nothing is shifted or rotated.
+    for pc in range(8):
+        assert fetch_pc(dut) == pc
+        assert int(dut.current_instruction.value) == full_words[pc]
+        assert int(dut.instruction_commit.value) == 1
+        dut.is_halt.value = 0
+        await fetch_edge(dut)
+
+    # The 4-bit logical PC continues; the 8-entry read mux uses pc[2:0].
+    assert fetch_pc(dut) == 8
+    assert int(dut.current_instruction.value) == full_words[0]
+
+    # Return to halted/loading state without clearing the static slots.
+    dut.rst_n.value = 0
+    await fetch_edge(dut)
+    dut.rst_n.value = 1
+    await fetch_edge(dut)
+    assert int(dut.done.value) == 1
+    assert fetch_pc(dut) == 0
+
+    # Short kernel: no 16-word padding; HALT is in slot 4.
+    short_words = [0x9002, 0x1103, 0x2204, 0x3305, 0xF000]
+    await fetch_upload_image(dut, short_words)
+    assert int(dut.current_instruction.value) == short_words[0]
+
+    try:
+        assert int(dut.write_pointer.value) == 5
+    except AttributeError:
+        pass
+
+    await fetch_go(dut)
+    assert fetch_pc(dut) == 0
+    try:
+        assert int(dut.write_pointer.value) == 0
+    except AttributeError:
+        pass
+
+    for pc, word in enumerate(short_words):
+        assert fetch_pc(dut) == pc
+        assert int(dut.current_instruction.value) == word
+        dut.is_halt.value = int(pc == 4)
         assert int(dut.instruction_commit.value) == 1
         await fetch_edge(dut)
 
     assert int(dut.done.value) == 1
-    assert int(dut.current_instruction.value) == words[0]
-    if fetch_pc(dut) is not None:
-        assert fetch_pc(dut) == 0
+    assert fetch_pc(dut) == 5
 
-    # Bare GO reruns without upload because the previous run restored ring
-    # orientation.  Prove the mouth still starts at instruction zero.
+    # Bare GO restores PC zero; static slots require no physical realignment.
     dut.is_halt.value = 0
     await fetch_go(dut)
-    assert int(dut.current_instruction.value) == words[0]
     assert int(dut.done.value) == 0
+    assert fetch_pc(dut) == 0
+    assert int(dut.current_instruction.value) == short_words[0]
 
-
-
-
-
-
-
-
+    for pc, word in enumerate(short_words):
+        assert int(dut.current_instruction.value) == word
+        dut.is_halt.value = int(pc == 4)
+        await fetch_edge(dut)
+    assert int(dut.done.value) == 1
 
 
 @hierarchy_test("clm_fetch_seq")
 async def cross_cutting_cycle_invariants(dut):
-    """Stress a mixed schedule and assert sequencer invariants every cycle."""
+    """Stress replay/scan/reconvergence while static slots never move."""
     await fetch_start(dut)
-    words = [0x5000 + i for i in range(15)] + [0xF000]
+
+    words = [0x5000 + i for i in range(8)]
     await fetch_upload_image(dut, words)
     await fetch_go(dut)
-
-    # Deterministic stimulus pattern deliberately creates normal commits,
-    # conflicts/replays, empty scans, and reconvergence bubbles.
-    previous_pc = fetch_pc(dut)
-    previous_instr = int(dut.current_instruction.value)
 
     for cycle in range(80):
         phase = cycle % 10
         dut.is_halt.value = 0
-        dut.instruction_shift_enable.value = 0
+        dut.instruction_valid.value = 0
         dut.stack_top_valid.value = 0
         dut.any_lane_active.value = 1
         dut.bank_conflict.value = 0
@@ -1496,48 +1622,35 @@ async def cross_cutting_cycle_invariants(dut):
         elif phase == 8:
             dut.stack_top_valid.value = 1
             dut.stack_top_type.value = 1
-            current_pc = fetch_pc(dut)
-            dut.stack_top_target.value = 0 if current_pc is None else current_pc
-            dut.bank_conflict.value = 1  # reconverge must beat it
+            dut.stack_top_target.value = fetch_pc(dut)
+            dut.bank_conflict.value = 1
 
         await Timer(1, unit="ns")
-        assert not (int(dut.operand_hold_load.value) and int(dut.operand_hold_use.value))
-        if int(dut.done.value):
-            assert int(dut.instruction_commit.value) == 0
-        if int(dut.instruction_shift_enable.value):
-            assert int(dut.instruction_commit.value) == 0
 
-        commit = int(dut.instruction_commit.value)
-        pop = int(dut.command_reconverge_pop.value)
-        hold_load = int(dut.operand_hold_load.value)
-        replay = int(dut.replay_state.value)
-        active = int(dut.any_lane_active.value)
-        token_valid = int(dut.stack_top_valid.value)
-        token_type = int(dut.stack_top_type.value)
+        assert not (
+            int(dut.operand_hold_load.value)
+            and int(dut.operand_hold_use.value)
+        )
+
         pc_before = fetch_pc(dut)
         instr_before = int(dut.current_instruction.value)
+        assert instr_before == words[pc_before & 0x7]
+
+        hold_load = int(dut.operand_hold_load.value)
+        pop = int(dut.command_reconverge_pop.value)
 
         await fetch_edge(dut)
 
         pc_after = fetch_pc(dut)
         instr_after = int(dut.current_instruction.value)
 
-        # Bubble/capture must park both ring and PC.  A scan or commit may move
-        # both.  This checks behavior, not the internal execution_advance wire.
         if hold_load or pop:
+            assert pc_after == pc_before
             assert instr_after == instr_before
-            if pc_before is not None:
-                assert pc_after == pc_before
+        elif pc_after != pc_before:
+            assert pc_after == ((pc_before + 1) & 0xF)
 
-        previous_pc = pc_after
-        previous_instr = instr_after
-
-        # Stop before accidental wrap/forever scan makes this diagnostic test
-        # unrelated to the intended mixed schedule.
-        if int(dut.done.value):
-            break
-
-
+        assert instr_after == words[pc_after & 0x7]
 
 
 # ===========================================================================
@@ -2038,6 +2151,9 @@ def lane_inert(dut):
     dut.force_one_box2.value = 0
     dut.swap_operands.value = 0
     dut.laneid_mode.value = 0
+    dut.host_mode.value = 0
+    dut.host_shift.value = 0
+    dut.host_serial_in.value = 0
     dut.subtract_prepare.value = 0
     dut.prepare_zero.value = 0
     dut.select_accumulator.value = 0
@@ -2098,6 +2214,43 @@ async def lane_ldi(dut, reg: int, value: int, active: int = 1, commit: int = 1):
     dut.force_one_box2.value = 1
     dut.prepare_zero.value = 1
     dut.writeback_select.value = 0
+    await lane_stable_edge(dut)
+    lane_inert(dut)
+
+
+async def lane_shift_host_byte(dut, value: int):
+    """Shift one complete byte into the real lane host slice, MSB first."""
+    if not 0 <= value < 256:
+        raise ValueError(value)
+
+    lane_inert(dut)
+    for bit_index in range(7, -1, -1):
+        dut.host_serial_in.value = (value >> bit_index) & 1
+        dut.host_shift.value = 1
+        await lane_stable_edge(dut)
+        dut.host_shift.value = 0
+        await Timer(1, unit="ns")
+    lane_inert(dut)
+    await Timer(1, unit="ns")
+
+
+async def lane_mov_host(dut, reg: int, active: int = 1, commit: int = 1):
+    """Drive the controls that decoder emits for MOV_HOST."""
+    lane_inert(dut)
+    dut.lane_active.value = active
+    dut.instruction_commit.value = commit
+    dut.register_write_enable.value = 1
+    dut.rd_address.value = reg
+
+    # Poison the ordinary immediate path. host_mode must override this with
+    # host_byte or the test will immediately catch it.
+    dut.immediate_value.value = 0x5A
+    dut.select_immediate.value = 1
+    dut.force_one_box2.value = 1
+    dut.prepare_zero.value = 1
+    dut.writeback_select.value = 0
+    dut.host_mode.value = 1
+
     await lane_stable_edge(dut)
     lane_inert(dut)
 
@@ -2248,8 +2401,46 @@ async def no_architectural_state_changes_when_commit_is_low(dut):
     assert int(dut.accumulator_value.value) == before_acc
 
 
+
+
+
+
+@hierarchy_test("clm_lane")
+async def mov_host_lane_slice_exhaustive_8bit_mux_mask_commit_and_r0(dut):
+    """Exhaust every host byte through the REAL lane0 slice and writeback path."""
+    await lane_start(dut)
+
+    # Every raw 8-bit value is legal now, including signed-negative encodings.
+    values = range(256) if exhaustive_enabled() else exhaustive_values()
+    for value in values:
+        await lane_shift_host_byte(dut, value)
+        assert int(dut.host_byte.value) == value
+        assert int(dut.host_serial_out.value) == ((value >> 7) & 1)
+
+        await lane_mov_host(dut, 4)
+        assert await lane_read_reg(dut, 4) == value
+
+    # host_mode=0 restores full-width ordinary LDI and ignores staged data.
+    await lane_shift_host_byte(dut, 0xE1)
+    await lane_ldi(dut, 4, 0xD3)
+    assert await lane_read_reg(dut, 4) == 0xD3
+
+    # MOV_HOST is still an ordinary SIMT instruction: mask and commit qualify it.
+    await lane_shift_host_byte(dut, 0x91)
+    await lane_mov_host(dut, 4, active=0)
+    assert await lane_read_reg(dut, 4) == 0xD3
+
+    await lane_mov_host(dut, 4, active=1, commit=0)
+    assert await lane_read_reg(dut, 4) == 0xD3
+
+    # R0 remains hardwired zero.
+    await lane_mov_host(dut, 0)
+    assert await lane_read_reg(dut, 0) == 0
+
+
 # ===========================================================================
 # TEST_SPI_HOST  (REAL HIERARCHY: core.spi_host)
+# MOV_HOST architecture: 011 = 32-clock distributed host-buffer load
 # ===========================================================================
 
 async def spi_stable_edge(dut):
@@ -2260,6 +2451,7 @@ async def spi_stable_edge(dut):
 
 async def spi_reset_spi(dut):
     await ensure_clock(dut, 20)
+    dut.command.value = SPI_CMD_STATUS
     dut.spi_sclk.value = 0
     dut.spi_mosi.value = 0
     dut.spi_cs_n.value = 1
@@ -2275,11 +2467,11 @@ async def spi_reset_spi(dut):
     await Timer(1, unit="ns")
 
 
-def spi_expected_status(done: int, count: int) -> int:
-    return ((count & 0x1F) << 2) | ((0 if done else 1) << 1) | (1 if done else 0)
+def spi_expected_status(done: int) -> int:
+    return ((0 if done else 1) << 1) | (1 if done else 0)
 
 
-async def spi_record_pulse(dut, signal_name: str, stop, samples=None):
+async def spi_record_pulse(dut, signal_name: str, stop, sample_name=None):
     sig = getattr(dut, signal_name)
     widths = []
     current_width = 0
@@ -2290,8 +2482,8 @@ async def spi_record_pulse(dut, signal_name: str, stop, samples=None):
         value = int(sig.value)
         if value:
             current_width += 1
-            if samples is not None:
-                high_samples.append(int(getattr(dut, samples).value))
+            if sample_name is not None:
+                high_samples.append(int(getattr(dut, sample_name).value))
         elif current_width:
             widths.append(current_width)
             current_width = 0
@@ -2300,10 +2492,18 @@ async def spi_record_pulse(dut, signal_name: str, stop, samples=None):
     return widths, high_samples
 
 
-async def spi_transact_with_pulse_record(spi, signal_name: str, command: int, word: int = 0, **kwargs):
+async def spi_transact_with_pulse_record(
+    spi,
+    signal_name: str,
+    command: int,
+    word: int = 0,
+    **kwargs,
+):
     stop = [False]
-    sample_name = "instruction_shift_data" if signal_name == "instruction_shift_enable" else None
-    monitor = cocotb.start_soon(spi_record_pulse(spi.dut, signal_name, stop, sample_name))
+    sample_name = "instruction_data" if signal_name == "instruction_valid" else None
+    monitor = cocotb.start_soon(
+        spi_record_pulse(spi.dut, signal_name, stop, sample_name)
+    )
     rx = await spi.transaction(command, word, **kwargs)
     stop[0] = True
     await RisingEdge(spi.dut.clk)
@@ -2311,186 +2511,187 @@ async def spi_transact_with_pulse_record(spi, signal_name: str, command: int, wo
     return rx, widths, samples
 
 
-async def spi_command_only_with_pulse_record(spi, signal_name: str, command: int, **kwargs):
-    stop = [False]
-    monitor = cocotb.start_soon(spi_record_pulse(spi.dut, signal_name, stop))
-    await spi.command_only(command, **kwargs)
-    stop[0] = True
-    await RisingEdge(spi.dut.clk)
-    widths, samples = await monitor
-    return widths, samples
+async def spi_record_host_stream(dut, stop):
+    """Capture the serial bit presented on every host_shift pulse."""
+    bits = []
+    pulse_widths = []
+    current_width = 0
+    while not stop[0]:
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        if int(dut.host_shift.value):
+            current_width += 1
+            bits.append(int(dut.host_serial_out.value))
+        elif current_width:
+            pulse_widths.append(current_width)
+            current_width = 0
+    if current_width:
+        pulse_widths.append(current_width)
+    return pulse_widths, bits
 
 
 @hierarchy_test("clm_spi_host")
 async def reset_synchronizers_and_no_phantom_edges(dut):
     await spi_reset_spi(dut)
+
     assert int(dut.sclk_sync.value) == 0
     assert int(dut.cs_n_sync.value) == 0b111
     assert int(dut.mosi_sync.value) == 0
-    assert int(dut.transaction_counter.value) == 0
-    assert int(dut.command_register.value) == SPI_CMD_NOP
-    assert int(dut.load_counter.value) == 0
     assert int(dut.go.value) == 0
-    assert int(dut.instruction_shift_enable.value) == 0
+    assert int(dut.instruction_valid.value) == 0
+    assert int(dut.host_shift.value) == 0
 
-    # Set CS genuinely active through the synchronizer, then place a tiny raw
-    # SCLK pulse entirely between core rising edges.  An async pin wiggle that
-    # is never sampled cannot synthesize a phantom synchronized rising edge.
+    # Capture a known non-buffer command.
+    dut.command.value = SPI_CMD_STATUS
     dut.spi_cs_n.value = 0
     await ClockCycles(dut.clk, 5)
-    before = int(dut.transaction_counter.value)
+    assert int(dut.command_latched.value) == SPI_CMD_STATUS
+
+    # A physical SCLK glitch entirely between core edges must not become a
+    # synchronized rising edge and therefore must not assert host_shift.
     await FallingEdge(dut.clk)
     await Timer(2, unit="ns")
+    dut.spi_mosi.value = 1
     dut.spi_sclk.value = 1
     await Timer(2, unit="ns")
     dut.spi_sclk.value = 0
     await ClockCycles(dut.clk, 5)
-    assert int(dut.transaction_counter.value) == before
-
-    # MOSI activity alone is data, never a clock event.
-    for _ in range(5):
-        dut.spi_mosi.value = 1
-        await Timer(3, unit="ns")
-        dut.spi_mosi.value = 0
-        await Timer(3, unit="ns")
-    await ClockCycles(dut.clk, 3)
-    assert int(dut.transaction_counter.value) == before
+    assert int(dut.host_shift.value) == 0
 
     dut.spi_cs_n.value = 1
-    await ClockCycles(dut.clk, 4)
+    await ClockCycles(dut.clk, 5)
+    assert int(dut.go.value) == 0
+    assert int(dut.instruction_valid.value) == 0
 
 
 @hierarchy_test("clm_spi_host")
 async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumulator_reads(dut):
+    """Retain the ordinary 16-clock SPI regression around the new command."""
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
     await spi.idle()
 
-    # Exercise the entire stated 1-5 MHz range with awkward relative phases to
-    # the 50 MHz core clock.  Correctness outside this range is not a contract.
     for hz in (1_000_000, 2_000_000, 5_000_000):
         for offset in (0, 3, 7, 11, 17):
-            status = await spi.transaction(SPI_CMD_STATUS, 0xA55A, spi_hz=hz, phase_offset_ns=offset)
-            assert status == spi_expected_status(done=1, count=0), (
+            status = await spi.transaction(
+                SPI_CMD_STATUS,
+                0xA55A,
+                spi_hz=hz,
+                phase_offset_ns=offset,
+            )
+            assert status == spi_expected_status(done=1), (
                 f"status wrong at {hz} Hz phase {offset} ns: 0x{status:04X}"
             )
 
-    # All four 1xx commands are accumulator reads, and command[1:0] is exactly
-    # the lane index.  Response is returned in the same transaction.
     lane_values = [0x0123, 0x4567, 0x89AB, 0xCDEF]
     for lane, expected in enumerate(lane_values):
         rx = await spi.transaction(SPI_CMD_ACC0 + lane, 0xFFFF)
-        assert rx == expected, f"lane {lane} read expected 0x{expected:04X}, got 0x{rx:04X}"
+        assert rx == expected, (
+            f"lane {lane} read expected 0x{expected:04X}, got 0x{rx:04X}"
+        )
 
-    # Mid-run reads are explicitly live/not latched.  Change both DONE and one
-    # accumulator input before the transaction and observe the new values.
     dut.sequencer_done.value = 0
     dut.lane2_accumulator.value = 0x1357
-    status = await spi.transaction(SPI_CMD_STATUS, 0)
-    assert status == spi_expected_status(done=0, count=0)
-    assert await spi.transaction(SPI_CMD_ACC0 + 2, 0) == 0x1357
+    assert await spi.transaction(SPI_CMD_STATUS, 0) == spi_expected_status(done=0)
+    assert await spi.transaction(SPI_CMD_ACC2, 0) == 0x1357
 
 
 @hierarchy_test("clm_spi_host")
-async def load_framing_every_data_pattern_pulse_width_counter_and_nop_semantics(dut):
+async def exec_frames_all_data_patterns_and_pulses_instruction_valid_once(dut):
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
     await spi.idle()
 
-    # Commands numerically embedded in a 16-bit instruction word are still raw
-    # LOAD data.  The only semantic discriminator is the preceding 3-bit command.
     patterns = [
-        0x0000, 0x1000, 0x2000, 0x3000, 0x4000, 0x7000, 0x8000, 0x9000,
-        0xA001, 0xB000, 0xD000, 0xE000, 0xF000, 0xFFFF, 0x55AA, 0xA55A,
+        0x0000, 0x1000, 0x2000, 0x3000,
+        0x4000, 0x7000, 0x8000, LDI(4, 0xFF),
+        MOV_HOST(4), MOV_HOST_RAW(4, 0xFF),
+        0xA001, 0xB000, 0xD000, 0xE000,
+        0xF000, 0xFFFF, 0x55AA, 0xA55A,
     ]
-    for index, word in enumerate(patterns, start=1):
-        rx, widths, samples = await spi_transact_with_pulse_record(
-            spi, "instruction_shift_enable", SPI_CMD_LOAD, word
-        )
-        # LOAD is 0xx, so current RTL returns the status snapshot during its
-        # full-duplex data phase.  That response is diagnostic only; the write is
-        # what matters architecturally.
-        assert rx == spi_expected_status(done=1, count=index - 1)
-        assert widths == [1], f"LOAD pulse widths for word {index}: {widths}"
-        assert samples == [word], (
-            f"instruction data was not stable beside one-cycle strobe: expected 0x{word:04X}, samples={samples}"
-        )
-        assert int(dut.load_counter.value) == min(index, 16)
 
-    # Counter saturates at 16 rather than wrapping.
-    for extra in range(4):
-        word = 0x6000 | extra
-        _, widths, samples = await spi_transact_with_pulse_record(
-            spi, "instruction_shift_enable", SPI_CMD_LOAD, word
+    for word in patterns:
+        rx, widths, samples = await spi_transact_with_pulse_record(
+            spi, "instruction_valid", SPI_CMD_EXEC, word
         )
+        assert rx == 0
         assert widths == [1]
         assert samples == [word]
-        assert int(dut.load_counter.value) == 16
+        assert int(dut.go.value) == 0
+        assert int(dut.host_shift.value) == 0
 
-    status = await spi.transaction(SPI_CMD_STATUS, 0)
-    assert status == spi_expected_status(done=1, count=16)
 
-    # NOP changes no state but, by current 0xx response selection, its data
-    # phase legitimately clocks out status rather than guaranteed zeros.
-    count_before = int(dut.load_counter.value)
-    rx = await spi.transaction(SPI_CMD_NOP, 0xDEAD)
-    assert rx == spi_expected_status(done=1, count=count_before)
-    assert int(dut.load_counter.value) == count_before
-    assert int(dut.instruction_shift_enable.value) == 0
+@hierarchy_test("clm_spi_host")
+async def buffer_command_exact_32_host_shift_bits_and_no_exec_or_go(dut):
+    """011 forwards exactly the 32 synchronized MOSI bits to the lane chain."""
+    await spi_reset_spi(dut)
+    spi = SpiMaster(dut)
+    await spi.idle()
+
+    lane_bytes = [0x12, 0x80, 0xFF, 0x35]
+    expected_bits = []
+    for value in lane_bytes:
+        expected_bits.extend((value >> n) & 1 for n in range(7, -1, -1))
+
+    for hz, offset in ((1_000_000, 0), (2_000_000, 7), (5_000_000, 17)):
+        stop = [False]
+        monitor = cocotb.start_soon(spi_record_host_stream(dut, stop))
+
+        await spi.load_host_buffer(
+            lane_bytes,
+            spi_hz=hz,
+            phase_offset_ns=offset,
+        )
+
+        stop[0] = True
+        await RisingEdge(dut.clk)
+        widths, got_bits = await monitor
+
+        assert got_bits == expected_bits, (
+            f"buffer serial stream mismatch at {hz} Hz phase {offset}: "
+            f"{got_bits}"
+        )
+        assert len(got_bits) == 32
+        assert widths == [1] * 32
+        assert int(dut.command_latched.value) == SPI_CMD_BUFFER
+        assert int(dut.instruction_valid.value) == 0
+        assert int(dut.go.value) == 0
+
+
+@hierarchy_test("clm_spi_host")
+async def buffer_command_latches_for_whole_frame_and_ignores_instruction_register_shift(dut):
+    """Changing ui_in command after CS falls cannot turn BUFFER into EXEC."""
+    await spi_reset_spi(dut)
+    spi = SpiMaster(dut)
+    await spi.idle()
+
+    lane_bytes = [0xDE, 0xAD, 0xBE, 0xEF]
+    bits = []
+    for value in lane_bytes:
+        bits.extend((value >> n) & 1 for n in range(7, -1, -1))
+
+    # Start as BUFFER, then deliberately change pins to EXEC while CS is low.
+    stop = [False]
+    host_monitor = cocotb.start_soon(spi_record_host_stream(dut, stop))
+    await spi.raw_frame(
+        SPI_CMD_BUFFER,
+        bits,
+        command_change_after_cs=SPI_CMD_EXEC,
+    )
+    stop[0] = True
+    await RisingEdge(dut.clk)
+    widths, got_bits = await host_monitor
+
+    assert int(dut.command_latched.value) == SPI_CMD_BUFFER
+    assert got_bits == bits
+    assert widths == [1] * 32
+    assert int(dut.instruction_valid.value) == 0
     assert int(dut.go.value) == 0
 
 
 @hierarchy_test("clm_spi_host")
-async def every_incomplete_load_length_is_noncommitting_but_go_can_fire_after_command_phase(dut):
-    await spi_reset_spi(dut)
-    spi = SpiMaster(dut)
-    await spi.idle()
-
-    # Every possible short data length 0..15 must fail to produce a complete
-    # instruction write.  No partial word may increment the visibility counter.
-    for data_len in range(16):
-        stop = [False]
-        mon = cocotb.start_soon(spi_record_pulse(dut, "instruction_shift_enable", stop, "instruction_shift_data"))
-        bits = [((0xA55A >> n) & 1) for n in range(15, 15 - data_len, -1)]
-        await spi.partial_load(bits)
-        stop[0] = True
-        await RisingEdge(dut.clk)
-        widths, _ = await mon
-        assert widths == [], f"partial LOAD with {data_len} data bits incorrectly strobed: {widths}"
-        assert int(dut.load_counter.value) == 0
-
-    # GO is intentionally different: it becomes effective on the falling edge
-    # after command bit 0, before the nominal 16 dummy data clocks.
-    widths, _ = await spi_command_only_with_pulse_record(spi, "go", SPI_CMD_GO)
-    assert widths == [1], f"short GO did not create exactly one core-cycle pulse: {widths}"
-    assert int(dut.load_counter.value) == 0
-
-
-@hierarchy_test("clm_spi_host")
-async def go_data_phase_ignored_exactly_one_pulse_and_clears_load_count(dut):
-    await spi_reset_spi(dut)
-    spi = SpiMaster(dut)
-    await spi.idle()
-
-    # Build a nonzero load count first.
-    for i in range(5):
-        await spi.transaction(SPI_CMD_LOAD, 0x1200 + i)
-    assert int(dut.load_counter.value) == 5
-
-    # Different dummy data words must not affect GO semantics.
-    for dummy in (0x0000, 0xFFFF, 0xA55A):
-        # Reload one word between GO commands so each clear can be observed.
-        if int(dut.load_counter.value) == 0:
-            await spi.transaction(SPI_CMD_LOAD, 0xBEEF)
-            assert int(dut.load_counter.value) == 1
-        _, widths, _ = await spi_transact_with_pulse_record(spi, "go", SPI_CMD_GO, dummy)
-        assert widths == [1], f"GO pulse width/duplication error for dummy 0x{dummy:04X}: {widths}"
-        assert int(dut.load_counter.value) == 0
-        assert int(dut.instruction_shift_enable.value) == 0
-
-
-@hierarchy_test("clm_spi_host")
-async def command_register_all_eight_encodings_and_back_to_back_restart(dut):
+async def all_eight_sideband_commands_and_back_to_back_frames(dut):
+    """000/001/010/011/100..111 are all distinct, live commands."""
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
     await spi.idle()
@@ -2500,33 +2701,39 @@ async def command_register_all_eight_encodings_and_back_to_back_restart(dut):
     dut.lane2_accumulator.value = 0x3333
     dut.lane3_accumulator.value = 0x4444
 
-    # 000 LOAD
+    # 000 EXEC.
     _, widths, samples = await spi_transact_with_pulse_record(
-        spi, "instruction_shift_enable", SPI_CMD_LOAD, 0xCAFE
+        spi, "instruction_valid", SPI_CMD_EXEC, 0xCAFE
     )
     assert widths == [1] and samples == [0xCAFE]
 
-    # 001 GO
-    _, widths, _ = await spi_transact_with_pulse_record(spi, "go", SPI_CMD_GO, 0x1234)
-    assert widths == [1]
+    # 001 GO.
+    for dummy in (0x0000, 0xFFFF, 0xA55A):
+        _, widths, _ = await spi_transact_with_pulse_record(
+            spi, "go", SPI_CMD_GO, dummy
+        )
+        assert widths == [1]
 
-    # 010 STATUS, 011 NOP
-    expected = spi_expected_status(done=1, count=0)
-    assert await spi.transaction(SPI_CMD_STATUS, 0) == expected
-    assert await spi.transaction(SPI_CMD_NOP, 0) == expected
+    # 010 STATUS.
+    dut.sequencer_done.value = 1
+    assert await spi.transaction(SPI_CMD_STATUS, 0) == spi_expected_status(done=1)
 
-    # 100..111 direct lane reads.
-    for lane, expected_lane in enumerate((0x1111, 0x2222, 0x3333, 0x4444)):
-        assert await spi.transaction(4 + lane, 0) == expected_lane
+    # 011 BUFFER: 32 clocks, no instruction/go pulse.
+    await spi.load_host_buffer([0x11, 0x22, 0x33, 0x44])
+    assert int(dut.command_latched.value) == SPI_CMD_BUFFER
+    assert int(dut.instruction_valid.value) == 0
+    assert int(dut.go.value) == 0
 
-    # Back-to-back frames restart their 19-clock count under separate CS pulses.
-    words = [0x0102, 0x0304, 0x0506, 0x0708]
-    for word in words:
+    # 100..111 direct accumulator reads.
+    for lane, expected in enumerate((0x1111, 0x2222, 0x3333, 0x4444)):
+        assert await spi.transaction(SPI_CMD_ACC0 + lane, 0) == expected
+
+    # Back-to-back EXEC frames still restart from CS framing only.
+    for word in (0x0102, 0x0304, 0x0506, 0x0708):
         _, widths, samples = await spi_transact_with_pulse_record(
-            spi, "instruction_shift_enable", SPI_CMD_LOAD, word
+            spi, "instruction_valid", SPI_CMD_EXEC, word
         )
         assert widths == [1] and samples == [word]
-    assert int(dut.load_counter.value) == len(words)
 
 
 # ===========================================================================
@@ -2630,3 +2837,212 @@ async def top_load_and_run(dut, spi, kernel, expected_accs, expected_cycles=None
             f"ring did not restore source orientation: mouth=0x{stats.final_instruction:04X}, expected slot0=0x{kernel[0]:04X}"
         )
     return stats
+
+
+# ===========================================================================
+# TARGETED-LDI FULL-CHIP TESTS
+# ===========================================================================
+
+
+# ===========================================================================
+# MOV_HOST FULL-CHIP TESTS
+# ===========================================================================
+
+async def mov_host_top_reset(dut):
+    await ensure_clock(dut, 20)
+    await Timer(1, unit="ns")
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+
+    spi = SpiMaster(dut, top_level=True)
+    spi.set_command(SPI_CMD_STATUS)
+    spi.set_sclk(0)
+    spi.set_mosi(0)
+    spi.set_cs(1)
+
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 5)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 5)
+    await Timer(1, unit="ns")
+
+    assert value_is_resolvable(dut.uo_out)
+    assert (int(dut.uo_out.value) & 1) == 1
+    return spi
+
+
+async def mov_host_go_and_wait_halt(dut, spi, timeout_cycles=64):
+    await spi.transaction(SPI_CMD_GO, 0)
+
+    # Short kernels can finish before transaction() returns, so accept already
+    # halted as well as a future done transition.
+    for _ in range(timeout_cycles):
+        if value_is_resolvable(dut.uo_out) and (int(dut.uo_out.value) & 1):
+            return
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        await Timer(1, unit="ns")
+    raise AssertionError("MOV_HOST kernel did not HALT")
+
+
+def core_host_bytes(core):
+    return [
+        int(core.lane0.host_byte.value),
+        int(core.lane1.host_byte.value),
+        int(core.lane2.host_byte.value),
+        int(core.lane3.host_byte.value),
+    ]
+
+
+@cocotb.test()
+async def mov_host_real_chain_lane0_first_order_full_overwrite_and_no_fetch_write(dut):
+    """Verify MOSI->L3->L2->L1->L0 ordering in the actual top-level chain."""
+    try:
+        spi = await mov_host_top_reset(dut)
+        core = top_core_handle(dut)
+
+        before_wp = int(core.fetch_seq.write_pointer.value)
+
+        first = [0x12, 0x34, 0x56, 0x78]
+        await spi.load_host_buffer(first, spi_hz=5_000_000)
+        assert core_host_bytes(core) == first
+        assert int(core.fetch_seq.write_pointer.value) == before_wp
+        assert int(core.instruction_valid.value) == 0
+
+        # A complete 32-bit load overwrites all stale slice state, despite the
+        # host_byte registers intentionally having no reset.
+        second = [0x80, 0xFF, 0x00, 0x7F]
+        await spi.load_host_buffer(second, spi_hz=1_000_000, phase_offset_ns=7)
+        assert core_host_bytes(core) == second
+        assert int(core.fetch_seq.write_pointer.value) == before_wp
+        assert int(core.instruction_valid.value) == 0
+    finally:
+        stop_test_clock()
+
+
+@cocotb.test()
+async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
+    """Check production decoder semantics without forcing its inputs."""
+    try:
+        spi = await mov_host_top_reset(dut)
+        core = top_core_handle(dut)
+
+        # Dirty payload proves bits[8:1] are irrelevant to MOV_HOST data source.
+        word = MOV_HOST_RAW(5, 0xD6)
+        await spi_load_kernel(spi, [word])
+        await Timer(2, unit="ns")
+
+        assert int(core.current_instruction.value) == word
+        assert int(core.decoder.host_mode.value) == 1
+        assert int(core.decoder.select_immediate.value) == 1
+        assert int(core.decoder.prepare_zero.value) == 1
+        assert int(core.decoder.force_one_box2.value) == 1
+        assert int(core.decoder.register_write_enable.value) == 1
+        assert int(core.decoder.rd_address.value) == 5
+        assert int(core.decoder.immediate_value.value) == 0xD6
+        assert int(core.decoder.bank_conflict.value) == 0
+
+        # Reset control/write pointer only; host bytes and GPRs are intentionally
+        # not reset, while normal LDI encoding must be fully restored.
+        dut.rst_n.value = 0
+        await ClockCycles(dut.clk, 3)
+        dut.rst_n.value = 1
+        await ClockCycles(dut.clk, 3)
+
+        normal = LDI(5, 0xFF)
+        await spi_load_kernel(spi, [normal])
+        await Timer(2, unit="ns")
+        assert int(core.current_instruction.value) == normal
+        assert int(core.decoder.host_mode.value) == 0
+        assert int(core.decoder.immediate_value.value) == 0xFF
+        assert int(core.decoder.rd_address.value) == 5
+    finally:
+        stop_test_clock()
+
+
+@cocotb.test()
+async def mov_host_four_arbitrary_lane_bytes_two_sources_add_end_to_end(dut):
+    """Stage two independent 4-byte vectors and perform real four-lane ADD."""
+    try:
+        spi = await mov_host_top_reset(dut)
+
+        a = [0x11, 0x80, 0xFE, 0x7F]
+        b = [0x01, 0xFF, 0x05, 0x81]
+        expected = [u8(x + y) for x, y in zip(a, b)]
+
+        # Stage A and copy all four lane-local bytes into R1 simultaneously.
+        await spi.load_host_buffer(a)
+        stage_a = exact_kernel([
+            MOV_HOST(1),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, stage_a)
+        await mov_host_go_and_wait_halt(dut, spi)
+
+        # New staging data does not disturb R1. Copy B into R2, add, expose R3.
+        await spi.load_host_buffer(b)
+        stage_b = exact_kernel([
+            MOV_HOST(2),
+            ADD(3, 1, 2),
+            CLRACC(),
+            LDAC(3, high=0),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, stage_b)
+        await mov_host_go_and_wait_halt(dut, spi)
+
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got == expected, (
+            f"MOV_HOST ADD expected {expected}, got {got}"
+        )
+    finally:
+        stop_test_clock()
+
+
+@cocotb.test()
+async def mov_host_buffer_persists_and_can_feed_multiple_registers_without_reload(dut):
+    """MOV_HOST reads staging state; it does not consume or clear the buffer."""
+    try:
+        spi = await mov_host_top_reset(dut)
+        values = [0x00, 0x7F, 0x80, 0xFF]
+        await spi.load_host_buffer(values)
+
+        kernel = exact_kernel([
+            MOV_HOST(1),
+            MOV_HOST(2),
+            ADD(3, 1, 2),
+            CLRACC(),
+            LDAC(3, high=0),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, kernel)
+        await mov_host_go_and_wait_halt(dut, spi)
+
+        expected = [u8(v + v) for v in values]
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got == expected
+    finally:
+        stop_test_clock()
+
+
+@cocotb.test()
+async def normal_ldi_broadcast_full_8bit_ignores_staged_host_bytes(dut):
+    """host_mode=0 must make ordinary LDI completely independent of host buffer."""
+    try:
+        spi = await mov_host_top_reset(dut)
+        await spi.load_host_buffer([0x00, 0x55, 0xAA, 0xFF])
+
+        kernel = exact_kernel([
+            LDI(4, 0xD3),
+            CLRACC(),
+            LDAC(4, high=0),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, kernel)
+        await mov_host_go_and_wait_halt(dut, spi)
+
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got == [0x00D3] * 4
+    finally:
+        stop_test_clock()
