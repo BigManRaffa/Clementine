@@ -135,10 +135,9 @@ module clm_decoder (
     // 1010 bit[0]=1 -> LANEID
     assign laneid_mode = select_mov & current_instruction[0];
     
-    // LDI bit[0]=1 -> targeted write. instruction[8:7] is the lane id,
-    // so the usable immediate narrows to 6 bits (0-63).
-    assign targeted_write = select_ldi & current_instruction[0];
-    assign lane_target = current_instruction[8:7];
+    // 1001 bit[0]=0 -> LDI (broadcast immediate)
+    // 1001 bit[0]=1 -> MOV_HOST (per-lane byte from the host buffer)
+    assign host_mode = select_ldi & current_instruction[0];
 
     wire normal_mov = select_mov & (~laneid_mode);
     

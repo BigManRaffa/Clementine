@@ -124,7 +124,7 @@ module tt_um_bigmanraffa_clm (
 
         .instruction_valid (instruction_valid),
         .instruction_data (instruction_data),
-        .go (go)
+        .go (go),
 
         .host_shift (host_shift),
         .host_serial_out (host_from_spi)
