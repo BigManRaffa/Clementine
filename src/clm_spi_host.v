@@ -63,7 +63,7 @@ module clm_spi_host (
     reg [2:0] command_latched;
 
     always @(posedge clk) begin
-        if (cs_falling_early) command_latched <= command;
+        if (cs_falling) command_latched <= command;
     end
 
     wire read_acc = command_latched[2];
@@ -75,12 +75,15 @@ module clm_spi_host (
     assign host_shift = cs_active & sclk_rising & is_buffer;
     assign host_serial_out = mosi_sync[1];
 
+    wire resp_read_acc = command[2];
+    wire resp_status   = (command == 3'b010);
+
     // one-hot, zero-idle, so abc folds these into aoi cells instead of
     // leaving a mux2 per bit
-    wire lane0_sel = read_acc & (~command_latched[1]) & (~command_latched[0]);
-    wire lane1_sel = read_acc & (~command_latched[1]) & ( command_latched[0]);
-    wire lane2_sel = read_acc & ( command_latched[1]) & (~command_latched[0]);
-    wire lane3_sel = read_acc & ( command_latched[1]) & ( command_latched[0]);
+    wire lane0_sel = resp_read_acc & (~command[1]) & (~command[0]);
+    wire lane1_sel = resp_read_acc & (~command[1]) & (command[0]);
+    wire lane2_sel = resp_read_acc & (command[1]) & (~command[0]);
+    wire lane3_sel = resp_read_acc & (command[1]) & (command[0]);
 
     wire [15:0] status_word;
     assign status_word[0] = sequencer_done;
@@ -88,7 +91,7 @@ module clm_spi_host (
     assign status_word[15:2] = 14'd0;
 
     wire [15:0] response_value;
-    assign response_value = (lane0_accumulator & {16{lane0_sel}}) | (lane1_accumulator & {16{lane1_sel}}) | (lane2_accumulator & {16{lane2_sel}}) | (lane3_accumulator & {16{lane3_sel}}) | (status_word       & {16{is_status}});
+    assign response_value = (lane0_accumulator & {16{lane0_sel}}) | (lane1_accumulator & {16{lane1_sel}}) | (lane2_accumulator & {16{lane2_sel}}) | (lane3_accumulator & {16{lane3_sel}}) | (status_word & {16{resp_status}});
 
     // one register both directions. no counter: cs frames the
     // transaction and the host owns the clock count.
