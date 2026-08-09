@@ -189,7 +189,7 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .host_mode (host_mode), (targeted_write),
+        .host_mode (host_mode),
 
         .subtract_prepare (subtract_prepare),
         .prepare_zero (prepare_zero),
@@ -270,7 +270,8 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .host_mode (host_mode), (targeted_write),
+        .host_mode (host_mode),
+        .host_shift (host_shift),
         .host_serial_in (host_chain_1_to_0),
         .host_serial_out (),
 
@@ -319,7 +320,8 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .host_mode (host_mode), (targeted_write),
+        .host_mode (host_mode),
+        .host_shift (host_shift),
         .host_serial_in (host_chain_2_to_1),
         .host_serial_out (host_chain_1_to_0),
 
@@ -368,7 +370,8 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .host_mode (host_mode), (targeted_write),
+        .host_mode (host_mode),
+        .host_shift (host_shift),
         .host_serial_in (host_chain_3_to_2),
         .host_serial_out (host_chain_2_to_1),
 
@@ -417,7 +420,8 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .host_mode (host_mode), (targeted_write),
+        .host_mode (host_mode),
+        .host_shift (host_shift),
         .host_serial_in (host_from_spi),
         .host_serial_out (host_chain_3_to_2),
 

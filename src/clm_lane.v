@@ -60,8 +60,6 @@ module clm_lane #(
     wire qualified_accumulator_mac_capture;
 
     assign qualified_register_write = lane_commit & register_write_enable;
-
-    assign qualified_register_write = lane_commit & register_write_enable & write_permitted;
     assign qualified_accumulator_clear = lane_commit & accumulator_clear;
     assign qualified_accumulator_load = lane_commit & accumulator_load;
     assign qualified_accumulator_mac_capture = lane_commit & accumulator_mac_capture;
@@ -82,9 +80,6 @@ module clm_lane #(
             host_byte <= {host_byte[6:0], host_serial_in};
         end
     end
-
-    assign host_serial_out = host_byte[7];
-
 
     clm_regfile #(
         .LANE_ID(LANE_ID)
@@ -118,6 +113,12 @@ module clm_lane #(
 
     assign highway_left = operand_hold_use ? operand_hold : read_data_even;
     assign highway_right = operand_hold_use ? conflict_bank_data : read_data_odd;
+
+    assign host_serial_out = host_byte[7];
+
+    // mov_host reuses the entire ldi datapath, only the source changes
+    wire [7:0] effective_immediate;
+    assign effective_immediate = host_mode ? host_byte : immediate_value;
 
     // please work
     clm_alu lane_alu (

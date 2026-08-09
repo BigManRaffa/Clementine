@@ -54,7 +54,6 @@ module clm_spi_host (
     wire cs_active = ~cs_n_sync[1];
     wire cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
     wire cs_rising = cs_n_sync[1] & (~cs_n_sync[2]);
-    wire is_buffer = (command_latched == 3'b011);
 
     // one stable copy of the pin command for the whole transaction. the
     // host sets it long before cs falls, so this is a capture, not a
@@ -69,6 +68,10 @@ module clm_spi_host (
     wire is_status = (command_latched == 3'b010);
     wire is_exec = (command_latched == 3'b000);
     wire is_go = (command_latched == 3'b001);
+    wire is_buffer;
+    assign is_buffer = (command_latched == 3'b011);
+    assign host_shift = cs_active & sclk_rising & is_buffer;
+    assign host_serial_out = mosi_sync[1];
 
     // one-hot, zero-idle, so abc folds these into aoi cells instead of
     // leaving a mux2 per bit
@@ -96,7 +99,7 @@ module clm_spi_host (
         if (cs_falling) begin
             data_register <= response_value;
         end
-        else if (cs_active & sclk_rising) begin
+        else if (cs_active & sclk_rising & (~is_buffer)) begin
             data_register <= {data_register[14:0], mosi_sync[1]};
         end
     end
