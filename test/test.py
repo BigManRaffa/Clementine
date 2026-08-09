@@ -11,28 +11,22 @@ from cocotb.handle import Deposit, Force, Release
 # Integer helpers
 # ---------------------------------------------------------------------------
 
-
 def u8(v: int) -> int:
     return v & 0xFF
 
-
 def u16(v: int) -> int:
     return v & 0xFFFF
-
 
 def s8(v: int) -> int:
     v &= 0xFF
     return v - 0x100 if v & 0x80 else v
 
-
 def s16(v: int) -> int:
     v &= 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
 
-
 def signed_product8(a: int, b: int) -> int:
     return u16(s8(a) * s8(b))
-
 
 def signed_cmp8(a: int, b: int, cond: int) -> bool:
     aa, bb = s8(a), s8(b)
@@ -45,7 +39,6 @@ def signed_cmp8(a: int, b: int, cond: int) -> bool:
     if cond == 3:
         return aa >= bb
     raise ValueError(cond)
-
 
 # ---------------------------------------------------------------------------
 # ISA encoders.  These implement the documented fixed 16-bit ISA, not decoder
@@ -74,50 +67,38 @@ COND_GT = 1
 COND_LE = 2
 COND_GE = 3
 
-
 def _rrr(op: int, rd: int, rs: int, rt: int, low: int = 0) -> int:
     return ((op & 0xF) << 12) | ((rd & 7) << 9) | ((rs & 7) << 6) | ((rt & 7) << 3) | (low & 7)
-
 
 def NOP() -> int:
     return 0x0000
 
-
 def ADD(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_ADD, rd, rs, rt)
-
 
 def SUB(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_SUB, rd, rs, rt)
 
-
 def AND(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_AND, rd, rs, rt)
-
 
 def OR(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_OR, rd, rs, rt)
 
-
 def XOR(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_XOR, rd, rs, rt)
-
 
 def SHL(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_SHIFT, rd, rs, rt, low=0)
 
-
 def SHR(rd: int, rs: int, rt: int) -> int:
     return _rrr(OP_SHIFT, rd, rs, rt, low=1)
-
 
 def MAC(rs: int, rt: int) -> int:
     return (OP_MAC << 12) | ((rs & 7) << 6) | ((rt & 7) << 3)
 
-
 def CLRACC() -> int:
     return OP_CLRACC << 12
-
 
 def LDI(rd: int, imm8: int) -> int:
     # Normal broadcast LDI. bit[0]=0 keeps the old 8-bit immediate format.
@@ -127,13 +108,11 @@ def LDI(rd: int, imm8: int) -> int:
         raise ValueError("LDI immediate must be 0..255")
     return (OP_LDI << 12) | (rd << 9) | (imm8 << 1)
 
-
 def MOV_HOST(rd: int) -> int:
     """Canonical MOV_HOST encoding: opcode 1001, bit[0]=1, payload bits zero."""
     if not 0 <= rd < 8:
         raise ValueError("MOV_HOST rd must be 0..7")
     return (OP_LDI << 12) | (rd << 9) | 1
-
 
 def MOV_HOST_RAW(rd: int, ignored_payload: int) -> int:
     """MOV_HOST with deliberate junk in instruction[8:1].
@@ -147,28 +126,22 @@ def MOV_HOST_RAW(rd: int, ignored_payload: int) -> int:
         raise ValueError("MOV_HOST payload must be 0..255")
     return (OP_LDI << 12) | (rd << 9) | (ignored_payload << 1) | 1
 
-
 def MOV(rd: int, rs: int) -> int:
     # MOV/LANEID subop is bit 0.  Normal MOV must encode zero here.
     return (OP_MOV << 12) | ((rd & 7) << 9) | ((rs & 7) << 6)
-
 
 def LANEID(rd: int) -> int:
     # rs is architecturally ignored.  Encode it as zero for deterministic code.
     return (OP_MOV << 12) | ((rd & 7) << 9) | 1
 
-
 def CMP(cond: int, rs: int, rt: int) -> int:
     return (OP_CMP << 12) | ((cond & 3) << 10) | ((rs & 7) << 6) | ((rt & 7) << 3)
-
 
 def MVAC(rd: int, high: int = 0) -> int:
     return (OP_MVAC << 12) | ((rd & 7) << 9) | ((high & 1) << 3)
 
-
 def LDAC(rs: int, high: int = 0) -> int:
     return (OP_LDAC << 12) | ((rs & 7) << 6) | ((high & 1) << 3)
-
 
 def IFP(else_pc: int) -> int:
     return (OP_IFP_ELSE << 12) | (0 << 4) | (else_pc & 0xF)
@@ -177,23 +150,8 @@ def IFP(else_pc: int) -> int:
 def ELSE(endif_pc: int) -> int:
     return (OP_IFP_ELSE << 12) | (1 << 4) | (endif_pc & 0xF)
 
-
 def HALT() -> int:
     return OP_HALT << 12
-
-
-def pad_kernel(words: Sequence[int]) -> List[int]:
-    """Legacy helper name; the addressed buffer does NOT need padding.
-
-    Append HALT if omitted and require the resulting static image to fit 8 slots.
-    """
-    body = [u16(x) for x in words]
-    if not body or ((body[-1] >> 12) & 0xF) != OP_HALT:
-        body.append(HALT())
-    if len(body) > 8:
-        raise ValueError(f"kernel needs {len(body)} words; addressed buffer has 8 slots")
-    return body
-
 
 def exact_kernel(words: Sequence[int]) -> List[int]:
     body = [u16(x) for x in words]
@@ -203,15 +161,12 @@ def exact_kernel(words: Sequence[int]) -> List[int]:
         raise ValueError("final semantic instruction must be HALT")
     return body
 
-
 # ---------------------------------------------------------------------------
 # Cocotb utilities
 # ---------------------------------------------------------------------------
 
-
 _TEST_CLOCK_TASK = None
 _TEST_CLOCK_PERIOD_NS = 20
-
 
 async def ensure_clock(dut, period_ns: int = 20):
     """Start one clock for THIS Cocotb test.
@@ -246,7 +201,6 @@ async def ensure_clock(dut, period_ns: int = 20):
             f"clock already running at {_TEST_CLOCK_PERIOD_NS} ns, requested {period_ns} ns"
         )
 
-
 def stop_test_clock():
     """Stop the current test's clock and forget its Task handle."""
     global _TEST_CLOCK_TASK
@@ -257,10 +211,8 @@ def stop_test_clock():
             pass
         _TEST_CLOCK_TASK = None
 
-
 async def start_clock(dut, period_ns: int = 20):
     await ensure_clock(dut, period_ns)
-
 
 async def active_low_reset(dut, cycles: int = 4):
     dut.rst_n.value = 0
@@ -268,10 +220,8 @@ async def active_low_reset(dut, cycles: int = 4):
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 2)
 
-
 async def settle(ns: int = 1):
     await Timer(ns, unit="ns")
-
 
 def value_is_resolvable(sig) -> bool:
     try:
@@ -283,19 +233,15 @@ def value_is_resolvable(sig) -> bool:
         except Exception:
             return False
 
-
 def iv(sig) -> int:
     return int(sig.value)
-
 
 def bit(v: int, n: int) -> int:
     return (v >> n) & 1
 
-
 def exhaustive_enabled() -> bool:
     """Full coverage is the default; FAST=1 is a developer convenience only."""
     return os.getenv("FAST", "0") not in {"1", "true", "TRUE", "yes", "YES"}
-
 
 def exhaustive_values() -> Iterable[int]:
     if exhaustive_enabled():
@@ -303,7 +249,6 @@ def exhaustive_values() -> Iterable[int]:
     # Deliberately biased quick subset: zeros, sign edges, patterns, random-ish.
     return [0x00, 0x01, 0x02, 0x07, 0x0F, 0x55, 0x7E, 0x7F,
             0x80, 0x81, 0xAA, 0xF0, 0xFE, 0xFF]
-
 
 # ---------------------------------------------------------------------------
 # SPI master for the NEW compact host.
@@ -321,7 +266,6 @@ SPI_CMD_ACC0   = 0b100
 SPI_CMD_ACC1   = 0b101
 SPI_CMD_ACC2   = 0b110
 SPI_CMD_ACC3   = 0b111
-
 
 class SpiMaster:
     def __init__(self, dut, top_level: bool = False):
@@ -519,7 +463,6 @@ class SpiMaster:
             sample_miso=False,
         )
 
-
     async def short_frame(
         self,
         command: int,
@@ -528,8 +471,9 @@ class SpiMaster:
     ):
         """Characterize the counterless CS-framed implementation.
 
-        Short frames are outside the MCU protocol; the valid host frame is
-        still 16 data clocks. The RTL intentionally has no length guard.
+        Short frames are outside the normal command protocol. EXEC/GO/STATUS/
+        ACC use 16 data clocks; BUFFER is the deliberate 32-clock exception.
+        The RTL intentionally has no length counter.
         """
         if not (0 <= command < 8):
             raise ValueError(command)
@@ -552,121 +496,19 @@ class SpiMaster:
         self.set_mosi(0)
         await ClockCycles(self.dut.clk, 5)
 
-
 async def spi_load_kernel(spi: SpiMaster, words: Sequence[int], spi_hz: int = 5_000_000):
     if not (1 <= len(words) <= 8):
         raise ValueError("Clementine addressed-buffer kernel is 1..8 words")
     for word in words:
         await spi.transaction(SPI_CMD_EXEC, word, spi_hz=spi_hz)
 
-
 async def spi_read_status(spi: SpiMaster, spi_hz: int = 5_000_000) -> int:
     return await spi.transaction(SPI_CMD_STATUS, 0, spi_hz=spi_hz)
-
 
 async def spi_read_acc(spi: SpiMaster, lane: int, spi_hz: int = 5_000_000) -> int:
     if lane not in range(4):
         raise ValueError(lane)
     return await spi.transaction(SPI_CMD_ACC0 + lane, 0, spi_hz=spi_hz)
-
-
-async def wait_for_done_signal(done_sig, clk, timeout_cycles: int = 256):
-    for _ in range(timeout_cycles):
-        await RisingEdge(clk)
-        await ReadOnly()
-        if int(done_sig.value):
-            return
-    raise AssertionError(f"DONE did not assert within {timeout_cycles} core cycles")
-
-
-@dataclass
-class RunStats:
-    cycles: int
-    commits: int
-    pc_advances: Optional[int]
-    final_pc: Optional[int]
-    final_instruction: Optional[int]
-
-
-async def monitor_top_run(dut, timeout_cycles: int = 256) -> RunStats:
-    """Measure a run from DONE falling to DONE rising.
-
-    When the simulator exposes fetch_seq.logical_pc, the monitor also proves the
-    physical-ring/PC invariant by counting every modulo-16 PC advance.  This is
-    diagnostic visibility only; pass/fail expectations are architectural.
-    """
-    done_sig = dut.uo_out
-
-    # Wait until the fetch sequencer actually leaves halted state.
-    for _ in range(timeout_cycles):
-        await RisingEdge(dut.clk)
-        await ReadOnly()
-        if not value_is_resolvable(done_sig):
-            raise AssertionError("DONE/debug bus contains X/Z while waiting for run to start")
-        if (int(done_sig.value) & 1) == 0:
-            break
-    else:
-        raise AssertionError("run never left HALT after GO")
-
-    pc_handle = None
-    try:
-        pc_handle = dut.fetch_seq.logical_pc
-        prev_pc = int(pc_handle.value)
-        advances = 0
-    except Exception:
-        prev_pc = None
-        advances = None
-
-    cycles = 0
-    commits = 0
-    while cycles < timeout_cycles:
-        # Sample commit permission *before* the edge it governs.  Sampling only
-        # after the edge would miss the HALT commit because halted becomes high
-        # on that same edge and immediately drives instruction_commit low.
-        try:
-            commit_before_edge = (int(dut.uo_out.value) >> 2) & 1
-        except Exception:
-            try:
-                commit_before_edge = int(dut.instruction_commit.value)
-            except Exception:
-                commit_before_edge = 0
-
-        await RisingEdge(dut.clk)
-        await ReadOnly()
-        cycles += 1
-        commits += commit_before_edge
-
-        if pc_handle is not None:
-            new_pc = int(pc_handle.value)
-            if new_pc != prev_pc:
-                if new_pc != ((prev_pc + 1) & 0xF):
-                    raise AssertionError(
-                        f"logical PC moved illegally {prev_pc:x}->{new_pc:x}; "
-                        "valid movement is hold or +1 mod 16"
-                    )
-                advances += 1
-            prev_pc = new_pc
-
-        if not value_is_resolvable(done_sig):
-            raise AssertionError("DONE/debug bus contains X/Z during active run")
-        if int(done_sig.value) & 1:
-            final_instruction = None
-            try:
-                final_instruction = int(dut.current_instruction.value)
-            except Exception:
-                try:
-                    final_instruction = int(dut.fetch_seq.current_instruction.value)
-                except Exception:
-                    pass
-            return RunStats(
-                cycles=cycles,
-                commits=commits,
-                pc_advances=advances,
-                final_pc=prev_pc,
-                final_instruction=final_instruction,
-            )
-
-    raise AssertionError(f"run did not return to HALT within {timeout_cycles} core cycles")
 
 # ---------------------------------------------------------------------------
 # Single-TOPLEVEL hierarchy harness
@@ -678,7 +520,6 @@ async def monitor_top_run(dut, timeout_cycles: int = 256) -> RunStats:
 # the INPUT ports of the target child; its outputs/state/logic are untouched.
 # Every force is released after the test.  Full-chip tests do not force anything.
 # ---------------------------------------------------------------------------
-
 
 class _DepositedSignal:
     """Writable view of a real storage element; no VPI force is left behind."""
@@ -696,7 +537,6 @@ class _DepositedSignal:
     def __getattr__(self, name):
         return getattr(self._handle, name)
 
-
 class _ForcedSignal:
     def __init__(self, handle, forced_registry):
         self._handle = handle
@@ -713,7 +553,6 @@ class _ForcedSignal:
 
     def __getattr__(self, name):
         return getattr(self._handle, name)
-
 
 class _HierarchyDut:
     def __init__(self, root, target, force_inputs, forced_registry):
@@ -733,27 +572,31 @@ class _HierarchyDut:
             return _ForcedSignal(handle, self._forced_registry)
         return handle
 
-
 class _DecoderHierarchyDut(_HierarchyDut):
-    """Drive decoder through the real fetch-sequencer source storage.
+    """Drive the production decoder through the real addressed-buffer sources.
 
-    Icarus does not reliably honor a Force applied directly to a child input
-    net that is continuously driven by its parent.  The decoder's instruction
-    input really comes from instruction_ring[0], and replay_state really comes
-    from fetch_seq.fsm_state.  During the first three combinational decoder
-    tests the core clock has not started, so depositing those two real state
-    elements gives a stable, wrapper-free exhaustive stimulus source.
+    Icarus does not reliably honor Force on a child input net continuously
+    driven by its parent. Decoder.current_instruction comes from fetch slot0
+    when logical_pc==0, while replay_state comes from fetch_seq.fsm_state.
+    The exhaustive decoder test runs without a clock, so deposits into those
+    real state elements remain stable without modifying RTL or tb.v.
     """
     def __init__(self, root, target, force_inputs, forced_registry):
         super().__init__(root, target, force_inputs, forced_registry)
         fetch = _core(root).fetch_seq
         try:
             self._instruction_source = fetch.slot0
+            self._replay_source = fetch.fsm_state
+            self._pc_source = fetch.logical_pc
         except Exception as exc:
             raise AssertionError(
-                "Icarus did not expose fetch_seq.slot0; decoder exhaustive test cannot be driven"
+                "Icarus did not expose fetch_seq slot0/fsm_state/logical_pc; "
+                "decoder exhaustive test cannot be driven"
             ) from exc
-        self._replay_source = fetch.fsm_state
+
+        # current_instruction is an 8-slot mux indexed by logical_pc[2:0].
+        # Hold it on slot0 for the entire combinational sweep.
+        self._pc_source.value = Deposit(0)
 
     def __getattr__(self, name):
         if name == "current_instruction":
@@ -762,10 +605,8 @@ class _DecoderHierarchyDut(_HierarchyDut):
             return _DepositedSignal(self._replay_source)
         return super().__getattr__(name)
 
-
 def _core(root):
     return root.tt_um_bigmanraffa_clm
-
 
 def _resolve_path(handle, dotted_path):
     for piece in dotted_path.split("."):
@@ -782,6 +623,7 @@ _HIER_TARGETS = {
         "lane0.lane_regfile",
         {
             "write_enable", "write_address", "write_data",
+            "laneid_mode",
             "read_row_even", "read_row_odd",
         },
     ),
@@ -853,7 +695,6 @@ _HIER_TARGETS = {
     ),
 }
 
-
 async def _release_forces(forced_registry):
     """Release every VPI force from a writable phase before another test starts."""
     # A failed assertion can unwind while Cocotb is in ReadOnly.  Advancing time
@@ -870,7 +711,6 @@ async def _release_forces(forced_registry):
     await Timer(1, unit="ns")
     if errors:
         raise AssertionError("failed to release VPI forces: " + repr(errors))
-
 
 def hierarchy_test(target_name):
     """Run a real child-module test under the one fixed TinyTapeout tb.
@@ -937,7 +777,6 @@ def hierarchy_test(target_name):
 
     return decorate
 
-
 # ===========================================================================
 # TEST_DECODER  (REAL HIERARCHY: core.decoder)
 # ===========================================================================
@@ -980,6 +819,7 @@ def decoder_expected_decoder(instr: int, replay: int):
         "force_one_box2": 0,
         "swap_operands": 0,
         "laneid_mode": 0,
+        "host_mode": 0,
         "subtract_prepare": 0,
         "prepare_zero": 0,
         "select_accumulator": 0,
@@ -1038,6 +878,10 @@ def decoder_expected_decoder(instr: int, replay: int):
     elif op == OP_CLRACC:
         exp["accumulator_clear"] = 1
     elif op == OP_LDI:
+        # bit0=0 -> broadcast LDI; bit0=1 -> MOV_HOST. Both reuse the same
+        # arithmetic/write controls; host_mode changes only the lane-local
+        # data source from immediate_value to host_byte.
+        exp["host_mode"] = instr & 1
         exp["select_immediate"] = 1
         exp["force_one_box2"] = 1
         exp["prepare_zero"] = 1
@@ -1084,7 +928,6 @@ def decoder_expected_decoder(instr: int, replay: int):
 
     return exp
 
-
 def decoder_check_signal(dut, name: str, expected, instr: int, replay: int):
     if expected is decoder_DONTCARE:
         return
@@ -1096,12 +939,42 @@ def decoder_check_signal(dut, name: str, expected, instr: int, replay: int):
             f"signal={name} expected={expected} got={got}"
         )
 
+@hierarchy_test("clm_decoder")
+async def exhaustive_decoder_architectural_contract(dut):
+    """Exhaust the entire 16-bit ISA in normal and replay decoder states."""
+    dut.current_instruction.value = 0
+    dut.replay_state.value = 0
+    await Timer(1, unit="ns")
 
+    if exhaustive_enabled():
+        instructions = range(0x10000)
+    else:
+        samples = set()
+        payloads = (0x000, 0x001, 0x008, 0x010, 0x055, 0x0AA, 0x1FE, 0x1FF,
+                    0x249, 0x492, 0x555, 0x7FF, 0xAAA, 0xFFF)
+        for op in range(16):
+            for payload in payloads:
+                samples.add((op << 12) | payload)
+            for rs in range(8):
+                for rt in range(8):
+                    samples.add((op << 12) | (3 << 9) | (rs << 6) | (rt << 3))
+                    samples.add((op << 12) | (5 << 9) | (rs << 6) | (rt << 3) | 1)
+        instructions = sorted(samples)
 
+    checked = 0
+    for replay in (0, 1):
+        dut.replay_state.value = replay
+        await Timer(1, unit="ns")
 
+        for instr in instructions:
+            dut.current_instruction.value = instr
+            await Timer(1, unit="ns")
+            expected = decoder_expected_decoder(instr, replay)
+            for name, value in expected.items():
+                decoder_check_signal(dut, name, value, instr, replay)
+            checked += 1
 
-
-
+    assert checked > 0
 
 # ===========================================================================
 # TEST_REGFILE  (REAL HIERARCHY: core.lane0.lane_regfile)
@@ -1112,10 +985,10 @@ async def regfile_start(dut):
     dut.write_enable.value = 0
     dut.write_address.value = 0
     dut.write_data.value = 0
+    dut.laneid_mode.value = 0
     dut.read_row_even.value = 0
     dut.read_row_odd.value = 0
     await Timer(1, unit="ns")
-
 
 async def regfile_write_reg(dut, addr: int, value: int):
     dut.write_address.value = addr
@@ -1125,7 +998,6 @@ async def regfile_write_reg(dut, addr: int, value: int):
     await ReadOnly()
     await Timer(1, unit="ns")
     dut.write_enable.value = 0
-
 
 async def regfile_read_reg(dut, addr: int) -> int:
     row = (addr >> 1) & 0x3
@@ -1137,12 +1009,63 @@ async def regfile_read_reg(dut, addr: int) -> int:
     await Timer(1, unit="ns")
     return int(dut.read_data_even.value)
 
-
 async def regfile_snapshot(dut):
     return [await regfile_read_reg(dut, i) for i in range(8)]
 
+@hierarchy_test("clm_regfile")
+async def register_file_exhaustive_architectural_behavior(dut):
+    """Exercise every stored register, all byte values, row routing and hard R0."""
+    await regfile_start(dut)
 
+    for addr in range(1, 8):
+        await regfile_write_reg(dut, addr, 0)
 
+    assert await regfile_read_reg(dut, 0) == 0
+
+    values = range(256) if exhaustive_enabled() else exhaustive_values()
+    for addr in range(1, 8):
+        for value in values:
+            await regfile_write_reg(dut, addr, value)
+            got = await regfile_read_reg(dut, addr)
+            assert got == value, (
+                f"R{addr} write/read mismatch: expected 0x{value:02X}, got 0x{got:02X}"
+            )
+            assert await regfile_read_reg(dut, 0) == 0
+
+    signatures = {
+        1: 0x11, 2: 0x22, 3: 0x33, 4: 0x44,
+        5: 0x55, 6: 0x66, 7: 0x77,
+    }
+    for addr, value in signatures.items():
+        await regfile_write_reg(dut, addr, value)
+
+    for row in range(4):
+        dut.read_row_even.value = row
+        dut.read_row_odd.value = row
+        await Timer(1, unit="ns")
+        even_reg = row << 1
+        odd_reg = (row << 1) | 1
+        expected_even = 0 if even_reg == 0 else signatures[even_reg]
+        expected_odd = signatures[odd_reg]
+        assert int(dut.read_data_even.value) == expected_even
+        assert int(dut.read_data_odd.value) == expected_odd
+
+    before = await regfile_snapshot(dut)
+    for value in (0x00, 0x01, 0x7F, 0x80, 0xFF):
+        await regfile_write_reg(dut, 0, value)
+        after = await regfile_snapshot(dut)
+        assert after == before
+        assert after[0] == 0
+
+    dut.write_enable.value = 0
+    dut.write_address.value = 3
+    dut.write_data.value = 0xEE
+    before = await regfile_snapshot(dut)
+    await RisingEdge(dut.clk)
+    await ReadOnly()
+    await Timer(1, unit="ns")
+    after = await regfile_snapshot(dut)
+    assert after == before
 
 # ===========================================================================
 # TEST_MASK_STACK  (REAL HIERARCHY: core.mask_stack)
@@ -1164,12 +1087,10 @@ async def mask_start(dut):
     await ReadOnly()
     await Timer(1, unit="ns")
 
-
 async def mask_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
     await Timer(1, unit="ns")
-
 
 async def mask_capture_predicate(dut, value: int, qual: int = 0xF):
     dut.predicate_out.value = value & 0xF
@@ -1177,13 +1098,11 @@ async def mask_capture_predicate(dut, value: int, qual: int = 0xF):
     await mask_edge(dut)
     dut.predicate_write_qualified.value = 0
 
-
 async def mask_do_ifp(dut, target: int):
     dut.target_address.value = target & 0xF
     dut.command_ifp.value = 1
     await mask_edge(dut)
     dut.command_ifp.value = 0
-
 
 async def mask_do_else(dut, target: int):
     dut.target_address.value = target & 0xF
@@ -1191,19 +1110,16 @@ async def mask_do_else(dut, target: int):
     await mask_edge(dut)
     dut.command_else.value = 0
 
-
 async def mask_do_pop(dut):
     dut.command_reconverge_pop.value = 1
     await mask_edge(dut)
     dut.command_reconverge_pop.value = 0
-
 
 def mask_maybe_internal(dut, name: str):
     try:
         return int(getattr(dut, name).value)
     except Exception:
         return None
-
 
 @hierarchy_test("clm_mask_stack")
 async def reset_predicate_capture_and_atomic_commands(dut):
@@ -1249,7 +1165,6 @@ async def reset_predicate_capture_and_atomic_commands(dut):
     assert int(dut.lane_active.value) == 0x0
     await mask_do_pop(dut)
     assert int(dut.lane_active.value) == 0xF
-
 
 @hierarchy_test("clm_mask_stack")
 async def exhaustive_ifp_partition_and_roundtrip(dut):
@@ -1327,7 +1242,6 @@ async def exhaustive_ifp_partition_and_roundtrip(dut):
             assert int(dut.stack_top_valid.value) == 1  # outer token survives
             assert int(dut.stack_top_type.value) == 0
             assert int(dut.stack_top_target.value) == 0xE
-
 
 @hierarchy_test("clm_mask_stack")
 async def nesting_depth_priority_exports_and_illegal_overflow_behavior(dut):
@@ -1425,7 +1339,6 @@ async def nesting_depth_priority_exports_and_illegal_overflow_behavior(dut):
     await mask_do_pop(dut)
     assert int(dut.stack_top_valid.value) == 0
 
-
 @hierarchy_test("clm_mask_stack")
 async def commands_work_even_with_zero_active_mask(dut):
     await mask_start(dut)
@@ -1444,7 +1357,6 @@ async def commands_work_even_with_zero_active_mask(dut):
     await mask_do_pop(dut)
     assert int(dut.lane_active.value) == 0xF
     assert int(dut.stack_top_valid.value) == 0
-
 
 # ===========================================================================
 # TEST_FETCH_SEQ  (REAL HIERARCHY: core.fetch_seq)
@@ -1472,12 +1384,10 @@ async def fetch_start(dut):
     await ReadOnly()
     await Timer(1, unit="ns")
 
-
 async def fetch_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
     await Timer(1, unit="ns")
-
 
 async def fetch_upload_word(dut, word: int):
     dut.instruction_in.value = word & 0xFFFF
@@ -1485,7 +1395,6 @@ async def fetch_upload_word(dut, word: int):
     await fetch_edge(dut)
     dut.instruction_valid.value = 0
     await Timer(1, unit="ns")
-
 
 async def fetch_upload_image(dut, words):
     if not (1 <= len(words) <= 8):
@@ -1507,7 +1416,6 @@ def fetch_pc(dut):
         return int(dut.logical_pc.value)
     except Exception:
         return None
-
 
 @hierarchy_test("clm_fetch_seq")
 async def reset_upload_order_and_warm_restart_contract(dut):
@@ -1595,7 +1503,6 @@ async def reset_upload_order_and_warm_restart_contract(dut):
         await fetch_edge(dut)
     assert int(dut.done.value) == 1
 
-
 @hierarchy_test("clm_fetch_seq")
 async def cross_cutting_cycle_invariants(dut):
     """Stress replay/scan/reconvergence while static slots never move."""
@@ -1652,6 +1559,49 @@ async def cross_cutting_cycle_invariants(dut):
 
         assert instr_after == words[pc_after & 0x7]
 
+@hierarchy_test("clm_fetch_seq")
+async def bank_conflict_capture_replay_holds_pc_then_commits_once(dut):
+    """Prove the sequencer's two-cycle same-bank replay state machine."""
+    await fetch_start(dut)
+
+    conflict_word = ADD(5, 1, 3)  # R1/R3 are both odd -> conflict
+    await fetch_upload_image(dut, [conflict_word, HALT()])
+
+    dut.rs_address.value = 1
+    dut.rt_address.value = 3
+    dut.bank_conflict.value = 1
+    dut.is_halt.value = 0
+    dut.any_lane_active.value = 1
+    dut.stack_top_valid.value = 0
+
+    await fetch_go(dut)
+    assert int(dut.done.value) == 0
+    assert fetch_pc(dut) == 0
+
+    assert int(dut.replay_state.value) == 0
+    assert int(dut.operand_hold_load.value) == 1
+    assert int(dut.operand_hold_use.value) == 0
+    assert int(dut.instruction_commit.value) == 0
+
+    await fetch_edge(dut)
+    assert fetch_pc(dut) == 0
+    assert int(dut.replay_state.value) == 1
+
+    assert int(dut.operand_hold_load.value) == 0
+    assert int(dut.operand_hold_use.value) == 1
+    assert int(dut.instruction_commit.value) == 1
+
+    await fetch_edge(dut)
+    assert fetch_pc(dut) == 1
+    assert int(dut.replay_state.value) == 0
+    assert int(dut.operand_hold_use.value) == 0
+
+    dut.bank_conflict.value = 0
+    dut.is_halt.value = 1
+    assert int(dut.instruction_commit.value) == 1
+    await fetch_edge(dut)
+    assert int(dut.done.value) == 1
+    assert fetch_pc(dut) == 2
 
 # ===========================================================================
 # TEST_MULTIPLIER  (REAL HIERARCHY: core.lane0.lane_alu.engine_multiplier)
@@ -1672,7 +1622,6 @@ async def exhaustive_signed_8x8_product_space(dut):
                 f"signed multiply {s8(a)} * {s8(b)} expected 0x{expected:04X}, got 0x{got:04X}"
             )
 
-
 # ===========================================================================
 # TEST_ALU  (REAL HIERARCHY: core.lane0.lane_alu)
 # ===========================================================================
@@ -1681,7 +1630,6 @@ async def exhaustive_signed_8x8_product_space(dut):
 # duplicate the implementation's box equations.  The golden results are the ISA
 # meanings: signed 8-bit add/sub/multiply, logical shifts, bitwise operations,
 # signed comparisons, and 16-bit wrapping accumulation.
-
 
 async def alu_start(dut):
     await ensure_clock(dut, 20)
@@ -1694,12 +1642,10 @@ async def alu_start(dut):
     alu_drive_inert(dut)
     await Timer(1, unit="ns")
 
-
 async def alu_stable_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
     await Timer(1, unit="ns")
-
 
 def alu_drive_inert(dut):
     dut.highway_left.value = 0
@@ -1722,7 +1668,6 @@ def alu_drive_inert(dut):
     dut.ldac_select_highway_right.value = 0
     alu_set_writeback(dut, 0)
 
-
 def alu_set_writeback(dut, which: int):
     """Select architectural writeback source.
 
@@ -1738,12 +1683,10 @@ def alu_set_writeback(dut, which: int):
         dut.writeback_enable_bitwise.value = int(which == 2)
         dut.writeback_enable_mvac.value = int(which == 3)
 
-
 def alu_accumulator(dut) -> int:
     if hasattr(dut, "accumulator_value"):
         return int(dut.accumulator_value.value)
     return int(dut.alu_accumulator.value)
-
 
 async def alu_clear_acc(dut):
     alu_drive_inert(dut)
@@ -1751,7 +1694,6 @@ async def alu_clear_acc(dut):
     await alu_stable_edge(dut)
     dut.accumulator_clear.value = 0
     assert alu_accumulator(dut) == 0
-
 
 async def alu_load_acc_half(dut, value: int, high: int, source_on_right: int = 0):
     alu_drive_inert(dut)
@@ -1762,7 +1704,6 @@ async def alu_load_acc_half(dut, value: int, high: int, source_on_right: int = 0
     dut.accumulator_load.value = 1
     await alu_stable_edge(dut)
     dut.accumulator_load.value = 0
-
 
 def alu_drive_add(dut, rs: int, rt: int, reversed_route: bool = False):
     alu_drive_inert(dut)
@@ -1775,7 +1716,6 @@ def alu_drive_add(dut, rs: int, rt: int, reversed_route: bool = False):
         dut.highway_right.value = rt
     dut.force_one_box2.value = 1
     alu_set_writeback(dut, 0)
-
 
 def alu_drive_sub_or_cmp(dut, rs: int, rt: int, reversed_route: bool = False):
     alu_drive_inert(dut)
@@ -1791,7 +1731,6 @@ def alu_drive_sub_or_cmp(dut, rs: int, rt: int, reversed_route: bool = False):
         dut.swap_operands.value = 0
     dut.subtract_prepare.value = 1
     alu_set_writeback(dut, 0)
-
 
 @hierarchy_test("clm_alu")
 async def exhaustive_add_and_routing_equivalence(dut):
@@ -1809,7 +1748,6 @@ async def exhaustive_add_and_routing_equivalence(dut):
             await Timer(1, unit="ns")
             got_reversed = int(dut.writeback_bus.value)
             assert got_reversed == expected, f"ADD reversed route {s8(a)}+{s8(b)} wrong"
-
 
 @hierarchy_test("clm_alu")
 async def exhaustive_subtraction_both_physical_routings(dut):
@@ -1833,7 +1771,6 @@ async def exhaustive_subtraction_both_physical_routings(dut):
         alu_drive_sub_or_cmp(dut, a, b, False)
         await Timer(1, unit="ns")
         assert int(dut.writeback_bus.value) == u8(a - b)
-
 
 @hierarchy_test("clm_alu")
 async def exhaustive_signed_compare_truth_table_and_routing(dut):
@@ -1860,7 +1797,6 @@ async def exhaustive_signed_compare_truth_table_and_routing(dut):
             dut.condition_select.value = cond
             await Timer(1, unit="ns")
             assert int(dut.predicate_out.value) == int(signed_cmp8(a, b, cond))
-
 
 @hierarchy_test("clm_alu")
 async def exhaustive_bitwise_logic_and_writeback_isolation(dut):
@@ -1890,7 +1826,6 @@ async def exhaustive_bitwise_logic_and_writeback_isolation(dut):
                 await Timer(1, unit="ns")
                 assert int(dut.writeback_bus.value) == expected
 
-
 @hierarchy_test("clm_alu")
 async def exhaustive_logical_shifter_all_bytes_amounts_directions_and_routes(dut):
     await alu_start(dut)
@@ -1919,7 +1854,6 @@ async def exhaustive_logical_shifter_all_bytes_amounts_directions_and_routes(dut
                         f"SHIFT dir={direction} data=0x{data:02X} amtbyte=0x{amount_byte:02X} "
                         f"route={'REV' if reversed_route else 'NORMAL'} expected=0x{expected:02X} got=0x{got:02X}"
                     )
-
 
 @hierarchy_test("clm_alu")
 async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
@@ -1970,7 +1904,6 @@ async def exhaustive_mov_ldi_and_forced_positive_one_semantics(dut):
         alu_set_writeback(dut, 0)
         await Timer(1, unit="ns")
         assert int(dut.writeback_bus.value) == value
-
 
 @hierarchy_test("clm_alu")
 async def exhaustive_mac_products_then_chains_wrap_and_accumulator_management(dut):
@@ -2061,7 +1994,6 @@ async def exhaustive_mac_products_then_chains_wrap_and_accumulator_management(du
         await alu_stable_edge(dut)
     assert alu_accumulator(dut) == before
 
-
 @hierarchy_test("clm_alu")
 async def accumulator_update_priority_and_writeback_source_exclusivity(dut):
     await alu_start(dut)
@@ -2124,7 +2056,6 @@ async def accumulator_update_priority_and_writeback_source_exclusivity(dut):
     await Timer(1, unit="ns")
     assert int(dut.writeback_bus.value) == 0x34
 
-
 # ===========================================================================
 # TEST_LANE  (REAL HIERARCHY: core.lane0)
 # ===========================================================================
@@ -2133,7 +2064,6 @@ async def lane_stable_edge(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
     await Timer(1, unit="ns")
-
 
 def lane_inert(dut):
     dut.read_row_even.value = 0
@@ -2168,7 +2098,6 @@ def lane_inert(dut):
     dut.writeback_select.value = 0
     dut.lane_active.value = 1
 
-
 async def lane_start(dut):
     await ensure_clock(dut, 20)
     lane_inert(dut)
@@ -2191,7 +2120,6 @@ async def lane_start(dut):
     lane_inert(dut)
     await Timer(1, unit="ns")
 
-
 async def lane_read_reg(dut, reg: int) -> int:
     row = (reg >> 1) & 3
     if reg & 1:
@@ -2201,7 +2129,6 @@ async def lane_read_reg(dut, reg: int) -> int:
     dut.read_row_even.value = row
     await Timer(1, unit="ns")
     return int(dut.lane_regfile.read_data_even.value)
-
 
 async def lane_ldi(dut, reg: int, value: int, active: int = 1, commit: int = 1):
     lane_inert(dut)
@@ -2217,7 +2144,6 @@ async def lane_ldi(dut, reg: int, value: int, active: int = 1, commit: int = 1):
     await lane_stable_edge(dut)
     lane_inert(dut)
 
-
 async def lane_shift_host_byte(dut, value: int):
     """Shift one complete byte into the real lane host slice, MSB first."""
     if not 0 <= value < 256:
@@ -2232,7 +2158,6 @@ async def lane_shift_host_byte(dut, value: int):
         await Timer(1, unit="ns")
     lane_inert(dut)
     await Timer(1, unit="ns")
-
 
 async def lane_mov_host(dut, reg: int, active: int = 1, commit: int = 1):
     """Drive the controls that decoder emits for MOV_HOST."""
@@ -2253,7 +2178,6 @@ async def lane_mov_host(dut, reg: int, active: int = 1, commit: int = 1):
 
     await lane_stable_edge(dut)
     lane_inert(dut)
-
 
 async def lane_clear_acc(dut, active: int = 1, commit: int = 1):
     lane_inert(dut)
@@ -2282,21 +2206,22 @@ async def lane_ldac_from_reg(dut, reg: int, high: int = 0, active: int = 1, comm
 
 
 async def lane_laneid_write(dut, reg: int, active: int = 1, commit: int = 1):
+    """Drive exactly the controls emitted by decoder for LANEID."""
     lane_inert(dut)
     dut.lane_active.value = active
     dut.instruction_commit.value = commit
     dut.register_write_enable.value = 1
     dut.rd_address.value = reg
     dut.laneid_mode.value = 1
-    # Make the ordinary ALU result deliberately nonzero.  The lane-ID source
-    # must override it at the wrapper writeback injection point.
-    dut.immediate_value.value = 0xA5
-    dut.select_immediate.value = 1
+
+    # LANEID is MOV bit0=1, not an immediate instruction. laneid_mode forces
+    # the virtual R0 leaf to LANE_ID and lane_read_row_even to row0.
+    dut.select_immediate.value = 0
     dut.force_one_box2.value = 1
     dut.prepare_zero.value = 1
+    dut.writeback_select.value = 0
     await lane_stable_edge(dut)
     lane_inert(dut)
-
 
 async def lane_capture_replay_binary(dut, rs: int, rt: int, rd: int, op: str):
     """Perform the architecturally specified two-cycle same-bank replay.
@@ -2360,13 +2285,6 @@ async def lane_capture_replay_binary(dut, rs: int, rt: int, rd: int, op: str):
     assert await lane_read_reg(dut, rd) == expected
     return expected
 
-
-
-
-
-
-
-
 @hierarchy_test("clm_lane")
 async def no_architectural_state_changes_when_commit_is_low(dut):
     await lane_start(dut)
@@ -2400,11 +2318,6 @@ async def no_architectural_state_changes_when_commit_is_low(dut):
     assert after_regs == before_regs
     assert int(dut.accumulator_value.value) == before_acc
 
-
-
-
-
-
 @hierarchy_test("clm_lane")
 async def mov_host_lane_slice_exhaustive_8bit_mux_mask_commit_and_r0(dut):
     """Exhaust every host byte through the REAL lane0 slice and writeback path."""
@@ -2435,6 +2348,45 @@ async def mov_host_lane_slice_exhaustive_8bit_mux_mask_commit_and_r0(dut):
 
     # R0 remains hardwired zero.
     await lane_mov_host(dut, 0)
+    assert await lane_read_reg(dut, 0) == 0
+
+
+
+
+@hierarchy_test("clm_lane")
+async def bank_conflict_operand_hold_replay_even_odd_r0_and_same_register(dut):
+    """Exercise the lane's operand_hold path on representative same-bank conflicts."""
+    await lane_start(dut)
+
+    seeds = {
+        1: 0x23, 2: 0xC8, 3: 0x05, 5: 0x81, 6: 0x11,
+    }
+    for reg, value in seeds.items():
+        await lane_ldi(dut, reg, value)
+
+    assert await lane_capture_replay_binary(dut, 1, 3, 7, "add") == u8(0x23 + 0x05)
+    assert await lane_capture_replay_binary(dut, 2, 6, 4, "sub") == u8(0xC8 - 0x11)
+    assert await lane_capture_replay_binary(dut, 0, 2, 5, "sub") == u8(0x00 - 0xC8)
+    assert await lane_capture_replay_binary(dut, 3, 3, 2, "sub") == 0
+
+
+@hierarchy_test("clm_lane")
+async def laneid_lane0_path_mask_commit_and_r0_contract(dut):
+    """Call the real LANEID helper; full 0/1/2/3 coverage is at top level."""
+    await lane_start(dut)
+
+    await lane_ldi(dut, 4, 0xA5)
+    await lane_laneid_write(dut, 4)
+    assert await lane_read_reg(dut, 4) == 0
+
+    await lane_ldi(dut, 4, 0x5A)
+    await lane_laneid_write(dut, 4, active=0)
+    assert await lane_read_reg(dut, 4) == 0x5A
+
+    await lane_laneid_write(dut, 4, active=1, commit=0)
+    assert await lane_read_reg(dut, 4) == 0x5A
+
+    await lane_laneid_write(dut, 0)
     assert await lane_read_reg(dut, 0) == 0
 
 
@@ -2737,7 +2689,7 @@ async def all_eight_sideband_commands_and_back_to_back_frames(dut):
 
 
 # ===========================================================================
-# TEST_TOP  (FIXED TINY TAPEOUT TOPLEVEL=tb)
+# TEST_TOP
 # ===========================================================================
 
 def top_core_handle(dut):
@@ -2746,103 +2698,6 @@ def top_core_handle(dut):
         return dut.tt_um_bigmanraffa_clm
     except AttributeError:
         return dut
-
-
-async def top_reset_top(dut):
-    await ensure_clock(dut, 20)
-    # Always enter from a writable phase, even if the previous unit test ended
-    # after a ReadOnly sample.
-    await Timer(1, unit="ns")
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    spi = SpiMaster(dut, top_level=True)
-    spi.set_sclk(0)
-    spi.set_mosi(0)
-    spi.set_cs(1)
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 5)
-    dut.rst_n.value = 1
-    await ClockCycles(dut.clk, 5)
-    await Timer(1, unit="ns")
-    assert value_is_resolvable(dut.uo_out), "uo_out contains X/Z immediately after clean top reset"
-    assert (int(dut.uo_out.value) & 1) == 1, "DONE must be high out of reset"
-
-    # R1-R7 and the 16-bit accumulator intentionally have no reset.  Earlier
-    # hierarchical unit tests are allowed to mutate them, so scrub every lane
-    # using a real Clementine program before each independent end-to-end test.
-    scrub = pad_kernel([
-        CLRACC(),
-        LDI(1, 0), LDI(2, 0), LDI(3, 0), LDI(4, 0),
-        LDI(5, 0), LDI(6, 0), LDI(7, 0),
-    ])
-    await spi_load_kernel(spi, scrub)
-    scrub_stats = await top_run_loaded_kernel(dut, spi)
-    assert scrub_stats.pc_advances in (None, 16)
-    assert value_is_resolvable(dut.uo_out), "uo_out became X/Z during architectural scrub"
-    return spi
-
-
-def top_debug_value(dut, bit: int) -> int:
-    return (int(dut.uo_out.value) >> bit) & 1
-
-
-def top_assert_debug_mapping(dut):
-    # Wrapper pins are the contract; hierarchy is only a diagnostic cross-check.
-    core = top_core_handle(dut)
-    try:
-        assert top_debug_value(dut, 0) == int(core.done.value)
-        assert top_debug_value(dut, 1) == int(core.any_lane_active.value)
-        assert top_debug_value(dut, 2) == int(core.instruction_commit.value)
-        assert top_debug_value(dut, 3) == int(core.replay_state.value)
-    except AttributeError:
-        pass
-    assert (int(dut.uo_out.value) >> 4) == 0
-
-
-async def top_run_loaded_kernel(dut, spi, timeout_cycles=512):
-    """Issue a real SPI GO while independently watching the core run.
-
-    GO takes effect after its 3-bit command phase, so a short kernel can finish
-    while the SPI master's nominal 16 dummy data clocks are still being sent.
-    Starting the run monitor *before* the transaction is therefore essential;
-    waiting until spi.transaction() returned would miss the run entirely.
-    """
-    monitor = cocotb.start_soon(monitor_top_run(top_core_handle(dut), timeout_cycles=timeout_cycles))
-    await Timer(1, unit="ns")
-    await spi.transaction(SPI_CMD_GO, 0x0000)
-    stats = await monitor
-    assert stats.pc_advances in (None, 16), f"architectural run made {stats.pc_advances} PC/ring advances, expected 16"
-    assert stats.final_pc in (None, 0), f"logical PC after HALT is {stats.final_pc}, expected 0"
-    top_assert_debug_mapping(dut)
-    assert top_debug_value(dut, 0) == 1
-    return stats
-
-
-async def top_load_and_run(dut, spi, kernel, expected_accs, expected_cycles=None):
-    await spi_load_kernel(spi, kernel)
-    status = await spi_read_status(spi)
-    assert status & 1, "machine must remain halted during upload"
-    assert ((status >> 2) & 0x1F) == 16, f"status load count expected 16, got {(status >> 2) & 0x1F}"
-    stats = await top_run_loaded_kernel(dut, spi)
-    if expected_cycles is not None:
-        assert stats.cycles == expected_cycles, f"run cycles expected {expected_cycles}, got {stats.cycles}"
-    status = await spi_read_status(spi)
-    assert (status & 1) == 1 and ((status >> 1) & 1) == 0
-    assert ((status >> 2) & 0x1F) == 0, "GO must clear host visibility load counter"
-    got = [await spi_read_acc(spi, lane) for lane in range(4)]
-    assert got == list(expected_accs), f"accumulators expected {[hex(x) for x in expected_accs]}, got {[hex(x) for x in got]}"
-    if stats.final_instruction is not None:
-        assert stats.final_instruction == kernel[0], (
-            f"ring did not restore source orientation: mouth=0x{stats.final_instruction:04X}, expected slot0=0x{kernel[0]:04X}"
-        )
-    return stats
-
-
-# ===========================================================================
-# TARGETED-LDI FULL-CHIP TESTS
-# ===========================================================================
-
 
 # ===========================================================================
 # MOV_HOST FULL-CHIP TESTS
@@ -2872,18 +2727,108 @@ async def mov_host_top_reset(dut):
     return spi
 
 
-async def mov_host_go_and_wait_halt(dut, spi, timeout_cycles=64):
-    await spi.transaction(SPI_CMD_GO, 0)
+@dataclass
+class KernelRunObservation:
+    saw_go: bool
+    saw_active: bool
+    cycles_active: int
+    replay_samples: int
+    pc_holds_while_active: int
+    final_pc: Optional[int]
 
-    # Short kernels can finish before transaction() returns, so accept already
-    # halted as well as a future done transition.
-    for _ in range(timeout_cycles):
-        if value_is_resolvable(dut.uo_out) and (int(dut.uo_out.value) & 1):
-            return
+
+async def _monitor_real_go_run(dut, timeout_cycles=64, pre_go_timeout_cycles=512):
+    """Require a real GO pulse and DONE high->low->high transition.
+
+    GO is emitted on synchronized CS rising, after the normal 16-clock SPI data
+    phase. At 5 MHz that is ~160 core cycles, so the pre-GO wait has its own
+    larger budget. timeout_cycles applies only after GO has actually appeared.
+    """
+    core = top_core_handle(dut)
+    saw_go = False
+    saw_active = False
+    cycles_active = 0
+    replay_samples = 0
+    pc_holds = 0
+    prev_pc = None
+    pre_go_cycles = 0
+
+    while True:
         await RisingEdge(dut.clk)
         await ReadOnly()
-        await Timer(1, unit="ns")
-    raise AssertionError("MOV_HOST kernel did not HALT")
+
+        go_now = int(core.go.value)
+        done = int(core.done.value)
+
+        try:
+            pc = int(core.fetch_seq.logical_pc.value)
+        except Exception:
+            pc = None
+
+        if not saw_go:
+            pre_go_cycles += 1
+            if go_now:
+                saw_go = True
+            elif pre_go_cycles >= pre_go_timeout_cycles:
+                raise AssertionError("GO pulse was never observed")
+
+        if saw_go and not done:
+            first_active_sample = not saw_active
+            if first_active_sample:
+                saw_active = True
+
+            cycles_active += 1
+            replay_samples += int(core.replay_state.value)
+
+            if (
+                not first_active_sample
+                and pc is not None
+                and prev_pc is not None
+                and pc == prev_pc
+            ):
+                pc_holds += 1
+            prev_pc = pc
+
+            if cycles_active > timeout_cycles:
+                raise AssertionError(
+                    f"kernel stayed active longer than {timeout_cycles} core cycles"
+                )
+
+        if saw_active and done:
+            return KernelRunObservation(
+                saw_go=True,
+                saw_active=True,
+                cycles_active=cycles_active,
+                replay_samples=replay_samples,
+                pc_holds_while_active=pc_holds,
+                final_pc=pc,
+            )
+
+
+async def mov_host_go_and_wait_halt(
+    dut,
+    spi,
+    timeout_cycles=64,
+    expected_final_pc=None,
+    require_replay=False,
+):
+    # The monitor starts BEFORE GO. A short kernel can start and finish before
+    # spi.transaction() returns from its post-CS synchronization delay.
+    monitor = cocotb.start_soon(_monitor_real_go_run(dut, timeout_cycles))
+    await Timer(1, unit="ns")
+    await spi.transaction(SPI_CMD_GO, 0)
+    observation = await monitor
+
+    assert observation.saw_go
+    assert observation.saw_active
+    if expected_final_pc is not None and observation.final_pc is not None:
+        assert observation.final_pc == expected_final_pc, (
+            f"final logical PC expected {expected_final_pc}, got {observation.final_pc}"
+        )
+    if require_replay:
+        assert observation.replay_samples >= 1, "bank-conflict run never entered replay"
+        assert observation.pc_holds_while_active >= 1, "capture/replay never held logical PC"
+    return observation
 
 
 def core_host_bytes(core):
@@ -2893,6 +2838,76 @@ def core_host_bytes(core):
         int(core.lane2.host_byte.value),
         int(core.lane3.host_byte.value),
     ]
+
+
+
+
+def _lane_gpr_value(core, lane: int, reg: int) -> int:
+    if reg == 0:
+        return 0
+    rf = getattr(core, f"lane{lane}").lane_regfile
+    return int(getattr(rf, f"reg_r{reg}").value)
+
+
+@cocotb.test()
+async def laneid_all_four_lanes_end_to_end(dut):
+    """Execute real LANEID and prove hardwired lane IDs 0/1/2/3 reach GPR state."""
+    try:
+        spi = await mov_host_top_reset(dut)
+        core = top_core_handle(dut)
+
+        kernel = exact_kernel([
+            LANEID(1),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, kernel)
+        obs = await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=2)
+        assert obs.replay_samples == 0
+
+        got = [_lane_gpr_value(core, lane, 1) for lane in range(4)]
+        assert got == [0, 1, 2, 3], f"LANEID expected [0,1,2,3], got {got}"
+    finally:
+        stop_test_clock()
+
+
+@cocotb.test()
+async def bank_conflict_replay_full_chip_mov_host_sub(dut):
+    """Integrate fetch capture/replay, lane operand_hold and one committed result."""
+    try:
+        spi = await mov_host_top_reset(dut)
+        core = top_core_handle(dut)
+
+        a = [0x21, 0x80, 0x05, 0xFF]
+        b = [0x03, 0x7F, 0x09, 0x01]
+
+        await spi.load_host_buffer(a)
+        await spi_load_kernel(spi, exact_kernel([MOV_HOST(1), HALT()]))
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=2)
+
+        await spi.load_host_buffer(b)
+        kernel = exact_kernel([
+            MOV_HOST(3),
+            SUB(5, 1, 3),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, kernel)
+        obs = await mov_host_go_and_wait_halt(
+            dut,
+            spi,
+            expected_final_pc=3,
+            require_replay=True,
+        )
+
+        assert obs.replay_samples == 1, (
+            f"one conflicted instruction should produce exactly one replay cycle, "
+            f"observed {obs.replay_samples}"
+        )
+
+        expected = [u8(x - y) for x, y in zip(a, b)]
+        got = [_lane_gpr_value(core, lane, 5) for lane in range(4)]
+        assert got == expected, f"replay SUB expected {expected}, got {got}"
+    finally:
+        stop_test_clock()
 
 
 @cocotb.test()
@@ -2978,7 +2993,7 @@ async def mov_host_four_arbitrary_lane_bytes_two_sources_add_end_to_end(dut):
             HALT(),
         ])
         await spi_load_kernel(spi, stage_a)
-        await mov_host_go_and_wait_halt(dut, spi)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=2)
 
         # New staging data does not disturb R1. Copy B into R2, add, expose R3.
         await spi.load_host_buffer(b)
@@ -2990,7 +3005,7 @@ async def mov_host_four_arbitrary_lane_bytes_two_sources_add_end_to_end(dut):
             HALT(),
         ])
         await spi_load_kernel(spi, stage_b)
-        await mov_host_go_and_wait_halt(dut, spi)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=5)
 
         got = [await spi_read_acc(spi, lane) for lane in range(4)]
         assert got == expected, (
@@ -3017,7 +3032,7 @@ async def mov_host_buffer_persists_and_can_feed_multiple_registers_without_reloa
             HALT(),
         ])
         await spi_load_kernel(spi, kernel)
-        await mov_host_go_and_wait_halt(dut, spi)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=6)
 
         expected = [u8(v + v) for v in values]
         got = [await spi_read_acc(spi, lane) for lane in range(4)]
@@ -3040,7 +3055,7 @@ async def normal_ldi_broadcast_full_8bit_ignores_staged_host_bytes(dut):
             HALT(),
         ])
         await spi_load_kernel(spi, kernel)
-        await mov_host_go_and_wait_halt(dut, spi)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
 
         got = [await spi_read_acc(spi, lane) for lane in range(4)]
         assert got == [0x00D3] * 4
