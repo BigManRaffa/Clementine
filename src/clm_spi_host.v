@@ -54,6 +54,8 @@ module clm_spi_host (
     wire cs_active = ~cs_n_sync[1];
     wire cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
     wire cs_rising = cs_n_sync[1] & (~cs_n_sync[2]);
+    wire cs_falling_early;
+    assign cs_falling_early = (~cs_n_sync[0]) & cs_n_sync[1];
 
     // one stable copy of the pin command for the whole transaction. the
     // host sets it long before cs falls, so this is a capture, not a
@@ -61,7 +63,7 @@ module clm_spi_host (
     reg [2:0] command_latched;
 
     always @(posedge clk) begin
-        if (cs_falling) command_latched <= command;
+        if (cs_falling_early) command_latched <= command;
     end
 
     wire read_acc = command_latched[2];
