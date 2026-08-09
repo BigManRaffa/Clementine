@@ -45,16 +45,14 @@ module clm_decoder (
     output wire register_write_enable,
     output wire predicate_write_enable,
 
-    output wire targeted_write,
-    output wire [1:0] lane_target
+    output wire host_mode
 );
 
     // sliced by format, a slice only matters under its own opcode, so overlaps dont clash
     assign rd_address = current_instruction[11:9];
     assign rs_address = current_instruction[8:6];
     assign rt_address = current_instruction[5:3];
-    assign immediate_value[5:0] = current_instruction[6:1];
-    assign immediate_value[7:6] = current_instruction[8:7] & {2{~targeted_write}};
+    assign immediate_value = current_instruction[8:1];
 
     assign mask_target = current_instruction[3:0];
 

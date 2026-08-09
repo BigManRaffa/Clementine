@@ -23,8 +23,10 @@ module clm_lane #(
     input wire swap_operands,
     input wire laneid_mode,
 
-    input wire targeted_write,
-    input wire [1:0] lane_target,
+    input wire host_mode,
+    input wire host_shift,
+    input wire host_serial_in,
+    output wire host_serial_out,
 
     input wire subtract_prepare,
     input wire prepare_zero,
@@ -57,11 +59,7 @@ module clm_lane #(
     wire qualified_accumulator_load;
     wire qualified_accumulator_mac_capture;
 
-wire lane_match;
-    assign lane_match = (lane_target == LANE_ID);
-
-    wire write_permitted;
-    assign write_permitted = (~targeted_write) | lane_match;
+    assign qualified_register_write = lane_commit & register_write_enable;
 
     assign qualified_register_write = lane_commit & register_write_enable & write_permitted;
     assign qualified_accumulator_clear = lane_commit & accumulator_clear;
@@ -76,6 +74,17 @@ wire lane_match;
     
     wire [1:0] lane_read_row_even;
     assign lane_read_row_even = laneid_mode ? 2'b00 : read_row_even;
+
+    reg [7:0] host_byte;
+
+    always @(posedge clk) begin
+        if (host_shift) begin
+            host_byte <= {host_byte[6:0], host_serial_in};
+        end
+    end
+
+    assign host_serial_out = host_byte[7];
+
 
     clm_regfile #(
         .LANE_ID(LANE_ID)
@@ -115,7 +124,7 @@ wire lane_match;
         .clk (clk),
         .highway_left (highway_left),
         .highway_right (highway_right),
-        .immediate_value (immediate_value),
+        .immediate_value (effective_immediate),
         .select_immediate (select_immediate),
         .force_one_box1 (force_one_box1),
         .force_one_box2 (force_one_box2),

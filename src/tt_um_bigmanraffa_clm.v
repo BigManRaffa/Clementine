@@ -85,8 +85,12 @@ module tt_um_bigmanraffa_clm (
 
     wire laneid_mode;
 
-    wire targeted_write;
-    wire [1:0] lane_target;
+    wire host_mode;
+    wire host_shift;
+    wire host_from_spi;
+    wire host_chain_3_to_2;
+    wire host_chain_2_to_1;
+    wire host_chain_1_to_0;
     
     wire any_lane_active;
     assign any_lane_active = |lane_active;
@@ -121,6 +125,9 @@ module tt_um_bigmanraffa_clm (
         .instruction_valid (instruction_valid),
         .instruction_data (instruction_data),
         .go (go)
+
+        .host_shift (host_shift),
+        .host_serial_out (host_from_spi),
     );
 
     clm_fetch_seq fetch_seq (
@@ -181,8 +188,8 @@ module tt_um_bigmanraffa_clm (
         .swap_operands (swap_operands),
 
         .laneid_mode (laneid_mode),
-        .targeted_write (targeted_write),
-        .lane_target (lane_target),
+
+        .host_mode (host_mode), (targeted_write),
 
         .subtract_prepare (subtract_prepare),
         .prepare_zero (prepare_zero),
@@ -263,9 +270,10 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .targeted_write (targeted_write),
-        .lane_target (lane_target),
-
+        .host_mode (host_mode), (targeted_write),
+        .host_serial_in (host_chain_1_to_0),
+        .host_serial_out (),
+        
         .predicate_out (predicate_out[0]),
         .predicate_write_qualified (predicate_write_qualified[0]),
         .accumulator_value (lane0_accumulator)
@@ -311,8 +319,9 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .targeted_write (targeted_write),
-        .lane_target (lane_target),
+        .host_mode (host_mode), (targeted_write),
+        .host_serial_in (host_chain_2_to_1),
+        .host_serial_out (host_chain_1_to_0),
 
         .predicate_out (predicate_out[1]),
         .predicate_write_qualified (predicate_write_qualified[1]),
@@ -359,8 +368,9 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .targeted_write (targeted_write),
-        .lane_target (lane_target),
+        .host_mode (host_mode), (targeted_write),
+        .host_serial_in (host_chain_3_to_2),
+        .host_serial_out (host_chain_2_to_1),
 
         .predicate_out (predicate_out[2]),
         .predicate_write_qualified (predicate_write_qualified[2]),
@@ -407,12 +417,14 @@ module tt_um_bigmanraffa_clm (
 
         .laneid_mode (laneid_mode),
 
-        .targeted_write (targeted_write),
-        .lane_target (lane_target),
+        .host_mode (host_mode), (targeted_write),
+        .host_serial_in (host_from_spi),
+        .host_serial_out (host_chain_3_to_2),
 
         .predicate_out (predicate_out[3]),
         .predicate_write_qualified (predicate_write_qualified[3]),
         .accumulator_value (lane3_accumulator)
+    
     );
 
     // List all unused inputs to prevent warnings
