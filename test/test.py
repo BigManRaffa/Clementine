@@ -205,7 +205,7 @@ def stop_test_clock():
     global _TEST_CLOCK_TASK
     if _TEST_CLOCK_TASK is not None:
         try:
-            _TEST_CLOCK_TASK.kill()
+            _TEST_CLOCK_TASK.cancel()
         except Exception:
             pass
         _TEST_CLOCK_TASK = None
@@ -374,6 +374,9 @@ class SpiMaster:
             await ClockCycles(self.dut.clk, 1)
 
         bits = [((tx_word >> n) & 1) for n in range(15, -1, -1)]
+        # We physically sample MISO on every ordinary frame because that is
+        # what a Mode-0 master does. Architecturally the returned bits matter
+        # only for STATUS and ACC0..ACC3; EXEC and GO MISO are don't-care.
         rx_bits = await self._clock_bits(bits, spi_hz, sample_miso=True)
 
         half_ns = 1e9 / (2.0 * spi_hz)
@@ -398,8 +401,9 @@ class SpiMaster:
     ) -> List[int]:
         """Send an arbitrary-length CS-framed data phase.
 
-        Normal transactions are 16 clocks. BUFFER (011) intentionally uses
-        32 clocks because the host staging chain is four 8-bit lane slices.
+        SPEC-valid ordinary transactions are 16 clocks. BUFFER (011) is the
+        sole 32-clock frame because the host staging chain is four 8-bit lane
+        slices. MISO is don't-care for BUFFER.
         """
         if not (0 <= command < 8):
             raise ValueError(command)
@@ -2493,6 +2497,9 @@ async def spi_transact_with_pulse_record(
     stop[0] = True
     await RisingEdge(spi.dut.clk)
     widths, samples = await monitor
+    # spi_record_pulse() samples in ReadOnly. Move to a writable time slot
+    # before the caller starts another SPI frame.
+    await Timer(1, unit="ns")
     return rx, widths, samples
 
 async def spi_record_host_stream(dut, stop):
@@ -2548,7 +2555,7 @@ async def reset_synchronizers_and_no_phantom_edges(dut):
 
 @hierarchy_test("clm_spi_host")
 async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumulator_reads(dut):
-    """Retain the ordinary 16-clock SPI regression around the new command."""
+    """SPEC: sideband command, same-frame reads, Mode-0 timing over 1-5 MHz."""
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
     await spi.idle()
@@ -2567,10 +2574,33 @@ async def supported_spi_rates_phase_offsets_same_transaction_status_and_accumula
 
     lane_values = [0x0123, 0x4567, 0x89AB, 0xCDEF]
     for lane, expected in enumerate(lane_values):
+        # SPEC: accumulator response belongs to THIS same 16-clock frame.
         rx = await spi.transaction(SPI_CMD_ACC0 + lane, 0xFFFF)
         assert rx == expected, (
-            f"lane {lane} read expected 0x{expected:04X}, got 0x{rx:04X}"
+            f"same-frame lane {lane} read expected 0x{expected:04X}, "
+            f"got 0x{rx:04X}"
         )
+
+    # SPEC: command is captured from sideband command/ui_in[2:0] at CS-fall.
+    # Changing the external command pins after capture cannot redirect either
+    # the response or behavior of the current frame.
+    status_latched = await spi.transaction(
+        SPI_CMD_STATUS,
+        0,
+        command_change_after_cs=SPI_CMD_ACC3,
+    )
+    assert status_latched == spi_expected_status(done=1), (
+        "STATUS response changed after sideband command pins changed mid-frame"
+    )
+
+    acc0_latched = await spi.transaction(
+        SPI_CMD_ACC0,
+        0,
+        command_change_after_cs=SPI_CMD_STATUS,
+    )
+    assert acc0_latched == lane_values[0], (
+        "ACC0 response changed after sideband command pins changed mid-frame"
+    )
 
     dut.sequencer_done.value = 0
     dut.lane2_accumulator.value = 0x1357
@@ -2592,10 +2622,11 @@ async def exec_frames_all_data_patterns_and_pulses_instruction_valid_once(dut):
     ]
 
     for word in patterns:
-        rx, widths, samples = await spi_transact_with_pulse_record(
+        _rx_dont_care, widths, samples = await spi_transact_with_pulse_record(
             spi, "instruction_valid", SPI_CMD_EXEC, word
         )
-        assert rx == 0
+        # SPEC: MISO is don't-care for EXEC. Only the write-side behavior
+        # (one instruction_valid pulse carrying this word) is architectural.
         assert widths == [1]
         assert samples == [word]
         assert int(dut.go.value) == 0
@@ -2626,6 +2657,7 @@ async def buffer_command_exact_32_host_shift_bits_and_no_exec_or_go(dut):
         stop[0] = True
         await RisingEdge(dut.clk)
         widths, got_bits = await monitor
+        await Timer(1, unit="ns")
 
         assert got_bits == expected_bits, (
             f"buffer serial stream mismatch at {hz} Hz phase {offset}: "
@@ -2660,6 +2692,7 @@ async def buffer_command_latches_for_whole_frame_and_ignores_instruction_registe
     stop[0] = True
     await RisingEdge(dut.clk)
     widths, got_bits = await host_monitor
+    await Timer(1, unit="ns")
 
     assert int(dut.command_latched.value) == SPI_CMD_BUFFER
     assert got_bits == bits
@@ -2669,7 +2702,7 @@ async def buffer_command_latches_for_whole_frame_and_ignores_instruction_registe
 
 @hierarchy_test("clm_spi_host")
 async def all_eight_sideband_commands_and_back_to_back_frames(dut):
-    """000/001/010/011/100..111 are all distinct, live commands."""
+    """SPEC: all sideband commands are distinct; read commands answer same-frame."""
     await spi_reset_spi(dut)
     spi = SpiMaster(dut)
     await spi.idle()
@@ -2848,6 +2881,11 @@ async def mov_host_go_and_wait_halt(
     await Timer(1, unit="ns")
     await spi.transaction(SPI_CMD_GO, 0)
     observation = await monitor
+
+    # _monitor_real_go_run() returns immediately after a ReadOnly sample of
+    # DONE. Leave ReadOnly before a caller is allowed to drive ui_in/uio_in
+    # for the next BUFFER/EXEC/read transaction.
+    await Timer(1, unit="ns")
 
     assert observation.saw_go
     assert observation.saw_active
