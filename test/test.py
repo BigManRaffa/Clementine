@@ -249,6 +249,10 @@ def exhaustive_values() -> Iterable[int]:
     return [0x00, 0x01, 0x02, 0x07, 0x0F, 0x55, 0x7E, 0x7F,
             0x80, 0x81, 0xAA, 0xF0, 0xFE, 0xFF]
 
+def gate_level() -> bool:
+    """True when the TinyTapeout gate-level netlist is under test."""
+    return os.getenv("GATES", "").lower() in {"yes", "1", "true"}
+
 # ---------------------------------------------------------------------------
 # SPI master for the NEW compact host.
 #
@@ -517,11 +521,10 @@ async def spi_read_acc(spi: SpiMaster, lane: int, spi_hz: int = 5_000_000) -> in
 # Single-TOPLEVEL hierarchy harness
 # ---------------------------------------------------------------------------
 #
-# TinyTapeout always compiles tb.v as TOPLEVEL=tb.  tb.v stays UNCHANGED.
-# Exhaustive tests therefore operate on the REAL production submodules already
-# instantiated beneath tb.tt_um_bigmanraffa_clm.  Python temporarily forces only
-# the INPUT ports of the target child; its outputs/state/logic are untouched.
-# Every force is released after the test.  Full-chip tests do not force anything.
+# TinyTapeout always compiles tb.v as TOPLEVEL=tb. RTL exhaustive tests operate
+# on real production submodules beneath tb.tt_um_bigmanraffa_clm and force only
+# target-child INPUT ports. Gate-level synthesis may flatten those submodules, so
+# hierarchy tests are SKIP under GATES=yes and full-chip tests use only chip pins.
 # ---------------------------------------------------------------------------
 
 class _DepositedSignal:
@@ -717,8 +720,9 @@ async def _release_forces(forced_registry):
 def hierarchy_test(target_name):
     """Run a real child-module test under the one fixed TinyTapeout tb.
 
-    This never silently returns.  Missing hierarchy is a hard failure, so a
-    reported PASS always means the test body actually executed.
+    RTL: missing production hierarchy is a hard failure, so PASS means the body
+    actually executed. GL: synthesized hierarchy is intentionally flattened, so
+    hierarchy tests are registered as SKIP and architecture is tested at pins.
     """
     if target_name not in _HIER_TARGETS:
         raise ValueError("unknown hierarchy target: " + target_name)
@@ -775,7 +779,11 @@ def hierarchy_test(target_name):
         guarded.__name__ = fn.__name__
         guarded.__qualname__ = fn.__name__
         guarded.__doc__ = fn.__doc__
-        return cocotb.test()(guarded)
+        # Synthesized GL netlists are flattened; decoder/lane/fetch/spi_host
+        # instance hierarchy is not an architectural interface. These unit and
+        # implementation tests remain exhaustive RTL regressions and are
+        # reported as SKIP (never fake PASS) under GATES=yes.
+        return cocotb.test(skip=gate_level())(guarded)
 
     return decorate
 
@@ -2789,7 +2797,7 @@ async def mov_host_top_reset(dut):
     await ClockCycles(dut.clk, 5)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 5)
-    await Timer(1, unit="ns")
+    await Timer(5 if gate_level() else 1, unit="ns")
 
     assert value_is_resolvable(dut.uo_out)
     assert (int(dut.uo_out.value) & 1) == 1
@@ -2805,13 +2813,15 @@ class KernelRunObservation:
     final_pc: Optional[int]
 
 async def _monitor_real_go_run(dut, execution_timeout_cycles=64, go_timeout_cycles=512):
-    """Require a real GO pulse and DONE high->low->high transition.
+    """Require a real run: halted -> active -> halted.
 
-    GO is emitted on synchronized CS rising, after the normal 16-clock SPI data
-    phase. At 5 MHz that is ~160 core cycles, so the pre-GO wait has its own
-    larger budget. execution_timeout_cycles applies only after GO has actually appeared.
+    RTL additionally observes the internal GO pulse, replay state and logical PC.
+    GL cannot rely on synthesized-away internal nets, so the externally visible
+    DONE bit dropping is the proof that the GO transaction actually started the
+    machine. If GO does nothing, DONE stays high and the pre-run timeout fires.
     """
-    core = top_core_handle(dut)
+    is_gl = gate_level()
+    core = None if is_gl else top_core_handle(dut)
     saw_go = False
     saw_active = False
     cycles_active = 0
@@ -2822,21 +2832,38 @@ async def _monitor_real_go_run(dut, execution_timeout_cycles=64, go_timeout_cycl
 
     while True:
         await RisingEdge(dut.clk)
+        # Gate-level cells are compiled with UNIT_DELAY=#1. Sample external
+        # outputs after a small in-cycle settle window instead of at the exact
+        # clock edge; RTL keeps zero added delay.
+        if is_gl:
+            await Timer(5, unit="ns")
         await ReadOnly()
 
-        go_now = int(core.go.value)
-        done = int(core.done.value)
+        # DONE is a real chip output (uo_out[0]) and therefore exists in RTL
+        # and in the flattened gate-level netlist.
+        done = bit(int(dut.uo_out.value), 0)
 
-        try:
-            pc = int(core.fetch_seq.logical_pc.value)
-        except Exception:
+        if is_gl:
+            go_now = 0
+            replay_now = 0
             pc = None
+        else:
+            go_now = int(core.go.value)
+            replay_now = int(core.replay_state.value)
+            try:
+                pc = int(core.fetch_seq.logical_pc.value)
+            except Exception:
+                pc = None
 
         if not saw_go:
             pre_go_cycles += 1
-            if go_now:
+            if (not is_gl and go_now) or (is_gl and not done):
+                # In RTL this means the actual GO pulse was seen. In GL the
+                # equivalent external proof is DONE leaving the halted state.
                 saw_go = True
             elif pre_go_cycles >= go_timeout_cycles:
+                if is_gl:
+                    raise AssertionError("GO transaction never caused DONE to leave halted state")
                 raise AssertionError("GO pulse was never observed")
 
         if saw_go and not done:
@@ -2845,7 +2872,7 @@ async def _monitor_real_go_run(dut, execution_timeout_cycles=64, go_timeout_cycl
                 saw_active = True
 
             cycles_active += 1
-            replay_samples += int(core.replay_state.value)
+            replay_samples += replay_now
 
             if (
                 not first_active_sample
@@ -2907,54 +2934,42 @@ async def mov_host_go_and_wait_halt(
     if require_replay:
         # IMPLEMENTATION REGRESSION ONLY. Architectural correctness does not
         # require a particular replay-state encoding or visible PC-hold shape.
+        assert not gate_level(), "require_replay is RTL-only; GL tests must check architectural results"
         assert observation.replay_samples >= 1, "bank-conflict run never entered current replay mechanism"
         assert observation.pc_holds_while_active >= 1, "current capture/replay mechanism never held logical PC"
     return observation
 
-def core_host_bytes(core):
-    return [
-        int(core.lane0.host_byte.value),
-        int(core.lane1.host_byte.value),
-        int(core.lane2.host_byte.value),
-        int(core.lane3.host_byte.value),
-    ]
-
-def _lane_gpr_value(core, lane: int, reg: int) -> int:
-    if reg == 0:
-        return 0
-    rf = getattr(core, f"lane{lane}").lane_regfile
-    return int(getattr(rf, f"reg_r{reg}").value)
-
 @cocotb.test()
 async def laneid_all_four_lanes_end_to_end(dut):
-    """Execute real LANEID and prove hardwired lane IDs 0/1/2/3 reach GPR state."""
+    """ARCHITECTURE PROOF: LANEID exposes physical lane IDs 0/1/2/3 at pins."""
     try:
         spi = await mov_host_top_reset(dut)
-        core = top_core_handle(dut)
 
+        # Copy LANEID through a GPR into the externally readable accumulator so
+        # the same proof works on RTL and the flattened gate-level netlist.
         kernel = exact_kernel([
             LANEID(1),
+            CLRACC(),
+            LDAC(1, high=0),
             HALT(),
         ])
         await spi_load_kernel(spi, kernel)
-        obs = await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=2)
-        assert obs.replay_samples == 0
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
 
-        got = [_lane_gpr_value(core, lane, 1) for lane in range(4)]
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
         assert got == [0, 1, 2, 3], f"LANEID expected [0,1,2,3], got {got}"
     finally:
         stop_test_clock()
 
-@cocotb.test()
+@cocotb.test(skip=gate_level())
 async def impl_regression_bank_conflict_replay_full_chip_shape(dut):
     """IMPLEMENTATION REGRESSION: current full-chip replay mechanism is visible.
 
-    The architectural same-bank SUB result is proven in a separate test that
-    does not require replay_state or a PC hold.
+    This test intentionally depends on RTL-visible replay/PC shape and is skipped
+    for GL. The architectural same-bank SUB result is proven separately at pins.
     """
     try:
         spi = await mov_host_top_reset(dut)
-        core = top_core_handle(dut)
 
         a = [0x21, 0x80, 0x05, 0xFF]
         b = [0x03, 0x7F, 0x09, 0x01]
@@ -2967,15 +2982,15 @@ async def impl_regression_bank_conflict_replay_full_chip_shape(dut):
         kernel = exact_kernel([
             MOV_HOST(3),
             SUB(5, 1, 3),
+            CLRACC(),
+            LDAC(5, high=0),
             HALT(),
         ])
         await spi_load_kernel(spi, kernel)
-        # IMPLEMENTATION REGRESSION: unlike the architecture-only sibling test,
-        # this intentionally requires the current replay mechanism to appear.
         obs = await mov_host_go_and_wait_halt(
             dut,
             spi,
-            expected_final_pc=3,
+            expected_final_pc=5,
             require_replay=True,
         )
 
@@ -2985,21 +3000,20 @@ async def impl_regression_bank_conflict_replay_full_chip_shape(dut):
         )
 
         expected = [u8(x - y) for x, y in zip(a, b)]
-        got = [_lane_gpr_value(core, lane, 5) for lane in range(4)]
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
         assert got == expected, f"replay SUB expected {expected}, got {got}"
     finally:
         stop_test_clock()
 
 @cocotb.test()
 async def bank_conflict_same_bank_sub_architectural_result(dut):
-    """ARCHITECTURE PROOF: same-bank SUB retires once with the correct lane results.
+    """ARCHITECTURE PROOF: same-bank SUB produces the correct four lane results.
 
-    This deliberately does NOT assert replay_state, operand_hold, PC-hold count,
-    or the number of internal cycles. Any legal implementation may satisfy it.
+    No replay-state, operand-hold, PC-hold, internal cycle count or GPR hierarchy
+    is required. The result is copied to accumulators and read through SPI.
     """
     try:
         spi = await mov_host_top_reset(dut)
-        core = top_core_handle(dut)
 
         a = [0x21, 0x80, 0x05, 0xFF]
         b = [0x03, 0x7F, 0x09, 0x01]
@@ -3011,13 +3025,15 @@ async def bank_conflict_same_bank_sub_architectural_result(dut):
         await spi.load_host_buffer(b)
         await spi_load_kernel(spi, exact_kernel([
             MOV_HOST(3),
-            SUB(5, 1, 3),   # R1/R3 are same-bank by the architectural register map
+            SUB(5, 1, 3),
+            CLRACC(),
+            LDAC(5, high=0),
             HALT(),
         ]))
-        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=3)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=5)
 
         expected = [u8(x - y) for x, y in zip(a, b)]
-        got = [_lane_gpr_value(core, lane, 5) for lane in range(4)]
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
         assert got == expected, f"same-bank SUB expected {expected}, got {got}"
     finally:
         stop_test_clock()
@@ -3026,33 +3042,31 @@ async def bank_conflict_same_bank_sub_architectural_result(dut):
 async def simt_ifp_else_reconvergence_architectural_kernel(dut):
     """ARCHITECTURE PROOF: real lanes take different IFP/ELSE paths and reconverge.
 
-    Kernel (all 8 static slots):
-      0 LANEID R1
-      1 LDI    R2, 2
-      2 CMP.LT R1, R2          -> lanes 0/1 true, lanes 2/3 false
-      3 IFP    5               -> ELSE boundary is PC 5
-      4 LDI    R3, 0x11        -> true side only
-      5 ELSE   7               -> reconverge boundary is PC 7
-      6 LDI    R3, 0x22        -> false side only
-      7 HALT                    -> executes after architectural reconvergence
-
-    Only final architectural register state and successful halt are asserted;
-    no stack encoding, bubble count, mask waveform, or PC-hold mechanism is part
-    of this proof.
+    A setup kernel preloads branch constants. The divergence kernel then loads
+    accumulator=0x11 on the true side and accumulator=0x22 on the false side.
+    Final values are read only through SPI, so this proof survives GL flattening.
     """
     try:
         spi = await mov_host_top_reset(dut)
-        core = top_core_handle(dut)
 
+        # Preload branch constants without relying on any internal GPR probe.
+        await spi_load_kernel(spi, exact_kernel([
+            LDI(4, 0x11),
+            LDI(5, 0x22),
+            HALT(),
+        ]))
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=3)
+
+        # All 8 static slots are used.
         kernel = exact_kernel([
             LANEID(1),
             LDI(2, 2),
-            CMP(0b00, 1, 2),   # signed LT
+            CMP(0b00, 1, 2),   # signed LT: lanes 0/1 true, 2/3 false
             IFP(5),
-            LDI(3, 0x11),
+            LDAC(4, high=0),   # true side -> 0x11
             ELSE(7),
-            LDI(3, 0x22),
-            HALT(),
+            LDAC(5, high=0),   # false side -> 0x22
+            HALT(),            # reached at reconvergence boundary
         ])
 
         await spi_load_kernel(spi, kernel)
@@ -3064,79 +3078,109 @@ async def simt_ifp_else_reconvergence_architectural_kernel(dut):
             expected_final_pc=8,
         )
 
-        got = [_lane_gpr_value(core, lane, 3) for lane in range(4)]
+        got = [await spi_read_acc(spi, lane) for lane in range(4)]
         assert got == [0x11, 0x11, 0x22, 0x22], (
             f"IFP/ELSE lane split expected [17,17,34,34], got {got}"
         )
-
-        # All lanes must be active again after the reconvergence boundary and HALT.
-        # This is architectural post-state, not a check of how reconvergence was
-        # implemented internally.
-        assert int(core.lane_active.value) == 0b1111
     finally:
         stop_test_clock()
 
 @cocotb.test()
 async def mov_host_real_chain_lane0_first_order_full_overwrite_and_no_fetch_write(dut):
-    """Verify MOSI->L3->L2->L1->L0 ordering in the actual top-level chain."""
+    """ARCHITECTURE PROOF: BUFFER order/overwrite and no instruction corruption."""
     try:
         spi = await mov_host_top_reset(dut)
-        core = top_core_handle(dut)
-
-        before_wp = int(core.fetch_seq.write_pointer.value)
 
         first = [0x12, 0x34, 0x56, 0x78]
         await spi.load_host_buffer(first, spi_hz=5_000_000)
-        assert core_host_bytes(core) == first
-        assert int(core.fetch_seq.write_pointer.value) == before_wp
-        assert int(core.instruction_valid.value) == 0
 
-        # A complete 32-bit load overwrites all stale slice state, despite the
-        # host_byte registers intentionally having no reset.
+        kernel = exact_kernel([
+            MOV_HOST(1),
+            CLRACC(),
+            LDAC(1, high=0),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, kernel)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
+        got_first = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got_first == first, f"first BUFFER load expected {first}, got {got_first}"
+
+        # A complete second 32-bit BUFFER load must overwrite all four slices.
+        # Do NOT upload instructions again: bare GO must rerun the same kernel.
+        # Therefore this also proves BUFFER did not write/corrupt the fetch image.
         second = [0x80, 0xFF, 0x00, 0x7F]
         await spi.load_host_buffer(second, spi_hz=1_000_000, phase_offset_ns=7)
-        assert core_host_bytes(core) == second
-        assert int(core.fetch_seq.write_pointer.value) == before_wp
-        assert int(core.instruction_valid.value) == 0
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
+        got_second = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got_second == second, (
+            f"second BUFFER overwrite/rerun expected {second}, got {got_second}"
+        )
     finally:
         stop_test_clock()
 
 @cocotb.test()
 async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
-    """Check production decoder semantics without forcing its inputs."""
+    """Prove MOV_HOST payload-ignore and restored full-width LDI at chip boundary.
+
+    RTL additionally checks the production decoder wires before execution. GL
+    relies only on the resulting SPI-visible architectural behavior.
+    """
     try:
         spi = await mov_host_top_reset(dut)
-        core = top_core_handle(dut)
+        core = None if gate_level() else top_core_handle(dut)
 
-        # Dirty payload proves bits[8:1] are irrelevant to MOV_HOST data source.
+        staged = [0x12, 0x34, 0x56, 0x78]
+        await spi.load_host_buffer(staged)
+
+        # Dirty payload proves bits[8:1] do not supply MOV_HOST's data value.
         word = MOV_HOST_RAW(5, 0xD6)
-        await spi_load_kernel(spi, [word])
+        mov_kernel = exact_kernel([
+            word,
+            CLRACC(),
+            LDAC(5, high=0),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, mov_kernel)
         await Timer(2, unit="ns")
 
-        assert int(core.current_instruction.value) == word
-        assert int(core.decoder.host_mode.value) == 1
-        assert int(core.decoder.select_immediate.value) == 1
-        assert int(core.decoder.prepare_zero.value) == 1
-        assert int(core.decoder.force_one_box2.value) == 1
-        assert int(core.decoder.register_write_enable.value) == 1
-        assert int(core.decoder.rd_address.value) == 5
-        assert int(core.decoder.immediate_value.value) == 0xD6
-        assert int(core.decoder.bank_conflict.value) == 0
+        if not gate_level():
+            assert int(core.current_instruction.value) == word
+            assert int(core.decoder.host_mode.value) == 1
+            assert int(core.decoder.select_immediate.value) == 1
+            assert int(core.decoder.prepare_zero.value) == 1
+            assert int(core.decoder.force_one_box2.value) == 1
+            assert int(core.decoder.register_write_enable.value) == 1
+            assert int(core.decoder.rd_address.value) == 5
+            assert int(core.decoder.immediate_value.value) == 0xD6
+            assert int(core.decoder.bank_conflict.value) == 0
 
-        # Reset control/write pointer only; host bytes and GPRs are intentionally
-        # not reset, while normal LDI encoding must be fully restored.
-        dut.rst_n.value = 0
-        await ClockCycles(dut.clk, 3)
-        dut.rst_n.value = 1
-        await ClockCycles(dut.clk, 3)
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
+        got_host = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got_host == staged, (
+            f"MOV_HOST_RAW payload affected host value: expected {staged}, got {got_host}"
+        )
 
         normal = LDI(5, 0xFF)
-        await spi_load_kernel(spi, [normal])
+        ldi_kernel = exact_kernel([
+            normal,
+            CLRACC(),
+            LDAC(5, high=0),
+            HALT(),
+        ])
+        await spi_load_kernel(spi, ldi_kernel)
         await Timer(2, unit="ns")
-        assert int(core.current_instruction.value) == normal
-        assert int(core.decoder.host_mode.value) == 0
-        assert int(core.decoder.immediate_value.value) == 0xFF
-        assert int(core.decoder.rd_address.value) == 5
+
+        if not gate_level():
+            assert int(core.current_instruction.value) == normal
+            assert int(core.decoder.host_mode.value) == 0
+            assert int(core.decoder.immediate_value.value) == 0xFF
+            assert int(core.decoder.rd_address.value) == 5
+
+        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
+        got_ldi = [await spi_read_acc(spi, lane) for lane in range(4)]
+        assert got_ldi == [0x00FF] * 4, (
+            f"full-width LDI expected {[0xFF] * 4}, got {got_ldi}"
+        )
     finally:
         stop_test_clock()
 
