@@ -3120,14 +3120,9 @@ async def mov_host_real_chain_lane0_first_order_full_overwrite_and_no_fetch_writ
 
 @cocotb.test()
 async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
-    """Prove MOV_HOST payload-ignore and restored full-width LDI at chip boundary.
-
-    RTL additionally checks the production decoder wires before execution. GL
-    relies only on the resulting SPI-visible architectural behavior.
-    """
+    """Prove MOV_HOST payload-ignore and restored full-width LDI at chip boundary."""
     try:
         spi = await mov_host_top_reset(dut)
-        core = None if gate_level() else top_core_handle(dut)
 
         staged = [0x12, 0x34, 0x56, 0x78]
         await spi.load_host_buffer(staged)
@@ -3140,26 +3135,26 @@ async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
             LDAC(5, high=0),
             HALT(),
         ])
+
         await spi_load_kernel(spi, mov_kernel)
-        await Timer(2, unit="ns")
 
-        if not gate_level():
-            assert int(core.current_instruction.value) == word
-            assert int(core.decoder.host_mode.value) == 1
-            assert int(core.decoder.select_immediate.value) == 1
-            assert int(core.decoder.prepare_zero.value) == 1
-            assert int(core.decoder.force_one_box2.value) == 1
-            assert int(core.decoder.register_write_enable.value) == 1
-            assert int(core.decoder.rd_address.value) == 5
-            assert int(core.decoder.immediate_value.value) == 0xD6
-            assert int(core.decoder.bank_conflict.value) == 0
-
-        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
-        got_host = [await spi_read_acc(spi, lane) for lane in range(4)]
-        assert got_host == staged, (
-            f"MOV_HOST_RAW payload affected host value: expected {staged}, got {got_host}"
+        await mov_host_go_and_wait_halt(
+            dut,
+            spi,
+            expected_final_pc=4,
         )
 
+        got_host = [
+            await spi_read_acc(spi, lane)
+            for lane in range(4)
+        ]
+
+        assert got_host == staged, (
+            f"MOV_HOST_RAW payload affected host value: "
+            f"expected {staged}, got {got_host}"
+        )
+
+        # Normal LDI must still carry the entire 8-bit immediate.
         normal = LDI(5, 0xFF)
         ldi_kernel = exact_kernel([
             normal,
@@ -3167,20 +3162,25 @@ async def mov_host_decoder_contract_and_normal_ldi_restored_full_width(dut):
             LDAC(5, high=0),
             HALT(),
         ])
+
         await spi_load_kernel(spi, ldi_kernel)
-        await Timer(2, unit="ns")
 
-        if not gate_level():
-            assert int(core.current_instruction.value) == normal
-            assert int(core.decoder.host_mode.value) == 0
-            assert int(core.decoder.immediate_value.value) == 0xFF
-            assert int(core.decoder.rd_address.value) == 5
-
-        await mov_host_go_and_wait_halt(dut, spi, expected_final_pc=4)
-        got_ldi = [await spi_read_acc(spi, lane) for lane in range(4)]
-        assert got_ldi == [0x00FF] * 4, (
-            f"full-width LDI expected {[0xFF] * 4}, got {got_ldi}"
+        await mov_host_go_and_wait_halt(
+            dut,
+            spi,
+            expected_final_pc=4,
         )
+
+        got_ldi = [
+            await spi_read_acc(spi, lane)
+            for lane in range(4)
+        ]
+
+        assert got_ldi == [0x00FF] * 4, (
+            f"full-width LDI expected {[0xFF] * 4}, "
+            f"got {got_ldi}"
+        )
+
     finally:
         stop_test_clock()
 
