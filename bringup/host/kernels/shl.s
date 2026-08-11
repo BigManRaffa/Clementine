@@ -1,0 +1,7 @@
+.host 1, 2, 3, 4
+MOV_HOST R1
+LDI R2, 4
+SHL R3, R1, R2
+CLRACC
+LDAC R3, LO
+HALT

@@ -1,0 +1,5 @@
+.host 0x11, 0x22, 0x33, 0x44
+MOV_HOST R1
+CLRACC
+LDAC R1, LO
+HALT

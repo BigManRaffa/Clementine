@@ -1,0 +1,6 @@
+.host 0xFF, 0xFE, 0x80, 0x7F
+CLRACC
+MOV_HOST R1
+LDI R2, 1
+MAC R1, R2
+HALT

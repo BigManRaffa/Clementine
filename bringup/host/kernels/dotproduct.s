@@ -1,0 +1,7 @@
+.host 2, 3, 4, 5
+CLRACC
+MOV_HOST R1
+LDI R2, 10
+MAC R1, R2
+MAC R1, R2
+HALT
