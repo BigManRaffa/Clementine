@@ -3267,3 +3267,21 @@ async def normal_ldi_broadcast_full_8bit_ignores_staged_host_bytes(dut):
         assert got == [0x00D3] * 4
     finally:
         stop_test_clock()
+
+@cocotb.test()
+async def hardware_mirror_single_mac_runs_once(dut):
+    """Mirror the exact hardware sequence: load 5 words, GO, read lane0."""
+    try:
+        spi = await mov_host_top_reset(dut)
+
+        for word in [0x8000, 0x9202, 0x9402, 0x7050, 0xF000]:
+            await spi.transaction(SPI_CMD_EXEC, word)
+
+        await spi.transaction(SPI_CMD_GO, 0)
+        await ClockCycles(dut.clk, 200)
+
+        acc = await spi_read_acc(spi, 0)
+        assert acc == 1, f"MAC ran {acc} times, expected exactly 1"
+
+    finally:
+        stop_test_clock()

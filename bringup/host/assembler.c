@@ -17,9 +17,9 @@
 #endif
 
 // machine limits
-#define SLOTS 8
-#define LANES 4
-#define MASK_DEPTH 2
+#define SLOTS       8
+#define LANES       4
+#define MASK_DEPTH  2
 
 enum {
     OP_NOP = 0x0, OP_ADD = 0x1, OP_SUB = 0x2, OP_AND = 0x3,
@@ -131,8 +131,8 @@ static void warn_at(int line, const char *fmt, ...)
 
 // source model
 #define MAX_OPERANDS 4
-#define MAX_TOKEN 64
-#define MAX_ITEMS 512
+#define MAX_TOKEN    64
+#define MAX_ITEMS    512
 
 typedef struct {
     char mnemonic[MAX_TOKEN];
@@ -565,6 +565,9 @@ static int serial_open(const char *dev)
         close(fd);
         return -1;
     }
+    // opening the port toggles DTR on a CP210x, which reboots the esp32.
+    // wait for it to come back, then drop whatever boot noise it emitted.
+    sleep(2);
     tcflush(fd, TCIOFLUSH);
     return fd;
 }
@@ -582,23 +585,85 @@ static int read_exact(int fd, uint8_t *buf, size_t n)
     return 1;
 }
 
-// one bridge transaction: command byte, payload, then two bytes of MISO back
+// packet framing on the uart link. the bridge checks the sync byte and the
+// checksum before it will touch spi, so a dropped byte costs one packet
+// instead of desyncing the link.
+#define SYNC_REQUEST 0xA5
+#define SYNC_REPLY 0x5A
+#define ST_OK 0x00
+
+static const char *bridge_error(uint8_t status)
+{
+    switch (status) {
+    case 0x01:
+        return "bad checksum";
+    case 0x02:
+        return "bad payload length";
+    case 0x03:
+        return "bad command";
+    case 0x04:
+        return "timed out mid packet";
+    default:
+        return "unknown status";
+    }
+}
+
+static uint8_t checksum(uint8_t len, uint8_t op, const uint8_t *data)
+{
+    uint8_t sum = len ^ op;
+    for (uint8_t i = 0; i < len; i++) {
+        sum ^= data[i];
+    }
+    return sum;
+}
+
+// one bridge transaction: a framed packet out, a framed reply back. the
+// reply always carries two bytes, the miso capture, meaningful only for
+// STATUS and READ_ACC.
 static int frame(int fd, int cmd, const uint8_t *payload, int n, uint16_t *resp)
 {
-    uint8_t out[1 + LANES];
-    out[0] = (uint8_t)cmd;
-    memcpy(out + 1, payload, (size_t)n);
+    uint8_t packet[4 + LANES];
+    int k = 0;
 
-    if (write(fd, out, (size_t)n + 1) != (ssize_t)(n + 1)) {
+    packet[k] = SYNC_REQUEST;
+    k++;
+    packet[k] = (uint8_t)n;
+    k++;
+    packet[k] = (uint8_t)cmd;
+    k++;
+    for (int i = 0; i < n; i++) {
+        packet[k] = payload[i];
+        k++;
+    }
+    packet[k] = checksum((uint8_t)n, (uint8_t)cmd, payload);
+    k++;
+
+    if (write(fd, packet, (size_t)k) != (ssize_t)k) {
         fprintf(stderr, "error: short write on serial port\n");
         return 0;
     }
-    uint8_t in[2];
-    if (read_exact(fd, in, 2) == 0) {
+
+    uint8_t reply[6];
+    if (read_exact(fd, reply, sizeof reply) == 0) {
         fprintf(stderr, "error: no reply from bridge, command %d\n", cmd);
         return 0;
     }
-    uint16_t value = (uint16_t)((in[0] << 8) | in[1]);
+    if (reply[0] != SYNC_REPLY) {
+        fprintf(stderr, "error: reply lost sync, got %02X\n", reply[0]);
+        return 0;
+    }
+    uint8_t sum = reply[1] ^ reply[2] ^ reply[3] ^ reply[4];
+    if (sum != reply[5]) {
+        fprintf(stderr, "error: reply checksum bad on command %d\n", cmd);
+        return 0;
+    }
+    if (reply[1] != ST_OK) {
+        fprintf(stderr, "error: bridge rejected command %d, %s\n",
+                cmd, bridge_error(reply[1]));
+        return 0;
+    }
+
+    uint16_t value = (uint16_t)((reply[3] << 8) | reply[4]);
     if (resp != NULL) {
         *resp = value;
     }
@@ -692,7 +757,7 @@ static void usage(const char *argv0)
         "  SHL SHR              rd, rs, rt\n"
         "  MAC                  rs, rt\n"
         "  CMPLT CMPGT CMPLE CMPGE  rs, rt\n"
-        "  LDI                  rd, imm        broadcast, -128 to 255\n"
+        "  LDI                  rd, imm        broadcast, -128..255\n"
         "  MOV_HOST             rd             each lane takes its staged byte\n"
         "  MOV                  rd, rs\n"
         "  LANEID               rd\n"

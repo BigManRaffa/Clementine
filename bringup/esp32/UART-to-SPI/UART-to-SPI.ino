@@ -4,13 +4,13 @@ static const int PIN_SCLK = 12;
 static const int PIN_MOSI = 11;
 static const int PIN_MISO = 13;
 
-static const int PIN_CS = 10;
+static const int PIN_CS = 9;
 
 static const int PIN_CMD0 = 4;
 static const int PIN_CMD1 = 5;
 static const int PIN_CMD2 = 6;
 
-static const uint32_t SPI_HZ = 2000000;
+static const uint32_t SPI_HZ = 500000;
 static const uint32_t UART_BAUD = 115200;
 
 static const uint8_t SYNC_REQUEST = 0xA5;
@@ -72,7 +72,7 @@ static void spi_transaction(uint8_t cmd, uint8_t *data, uint8_t len)
 
     SPI.beginTransaction(SPISettings(SPI_HZ, MSBFIRST, SPI_MODE0));
     digitalWrite(PIN_CS, LOW);
-    delayMicroseconds(1);
+    delayMicroseconds(50);
 
     for (uint8_t i = 0; i < len; i++) {
         data[i] = SPI.transfer(data[i]);
@@ -97,8 +97,8 @@ void setup()
     digitalWrite(PIN_CMD1, LOW);
     digitalWrite(PIN_CMD2, LOW);
 
-    // -1 for the CS argument keeps the driver away from it
     SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI, -1);
+
 }
 
 void loop()
@@ -164,8 +164,6 @@ void loop()
 
     spi_transaction(op, payload, len);
 
-    // the chip shifts MISO out MSB first, so the first captured byte is the
-    // high half of the 16 bit answer
     uint16_t value = ((uint16_t)payload[0] << 8) | (uint16_t)payload[1];
     send_reply(ST_OK, value);
 }

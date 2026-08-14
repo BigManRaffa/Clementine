@@ -1,0 +1,23 @@
+<?xml version="1" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW2AR-18C" pn="GW2AR-LV18QN88C8/I7">gw2ar18c-000</Device>
+    <FileList>
+        <File path="src/clm_alu.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_decoder.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_fa.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_fetch_seq.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_ha.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_lane.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_mask_stack.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_mult_bw.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_regfile.v" type="file.verilog" enable="1"/>
+        <File path="src/clm_spi_host.v" type="file.verilog" enable="1"/>
+        <File path="src/fpga_top.v" type="file.verilog" enable="1"/>
+        <File path="src/tt_um_bigmanraffa_clm.v" type="file.verilog" enable="1"/>
+        <File path="src/clementine.cst" type="file.cst" enable="1"/>
+        <File path="src/clementine.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+</Project>
