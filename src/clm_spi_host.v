@@ -54,7 +54,6 @@ module clm_spi_host (
     wire cs_active = ~cs_n_sync[1];
     wire cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
     wire cs_rising = cs_n_sync[1] & (~cs_n_sync[2]);
-    wire sclk_falling = (~sclk_sync[1]) & sclk_sync[2];
 
     reg [2:0] command_latched;
 
@@ -71,7 +70,6 @@ module clm_spi_host (
     assign is_buffer = (command_latched == 3'b011);
     assign host_shift = cs_active & sclk_rising & is_buffer;
     assign host_serial_out = mosi_sync[1];
-    wire shift_edge = is_exec ? sclk_rising : sclk_falling;
 
     // one-hot, zero-idle, so abc folds these into aoi cells instead of
     // leaving a mux2 per bit
@@ -90,17 +88,17 @@ module clm_spi_host (
 
     // one register both directions. no counter: cs frames the
     // transaction and the host owns the clock count.
-    reg [15:0] data_register;
+    reg [16:0] data_register;
 
-    assign spi_miso = data_register[15];
-    assign instruction_data = data_register;
+    assign spi_miso = data_register[16];
+    assign instruction_data = data_register[15:0];
 
     always @(posedge clk) begin
-        if (cs_falling) begin
-            data_register <= response_value;
+    if (cs_falling) begin
+            data_register <= {1'b0, response_value};
         end
-        else if (cs_active & shift_edge) begin
-            data_register <= {data_register[14:0], mosi_sync[1]};
+        else if (cs_active & sclk_rising & (~is_buffer)) begin
+            data_register <= {data_register[15:0], mosi_sync[1]};
         end
     end
 
