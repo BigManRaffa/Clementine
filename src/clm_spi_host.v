@@ -54,7 +54,6 @@ module clm_spi_host (
     wire cs_active = ~cs_n_sync[1];
     wire cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
     wire cs_rising = cs_n_sync[1] & (~cs_n_sync[2]);
-    wire sclk_falling = (~sclk_sync[1]) & sclk_sync[2];
 
     reg [2:0] command_latched;
 
@@ -111,7 +110,7 @@ module clm_spi_host (
         else if (cs_falling) begin
             miso_out <= response_value[15];
         end
-        else if (cs_active & sclk_falling) begin
+        else if (cs_active & (~sclk_sync[1])) begin
             miso_out <= data_register[15];
         end
     end
