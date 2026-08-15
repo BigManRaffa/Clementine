@@ -2467,7 +2467,7 @@ async def spi_reset_spi(dut):
     await Timer(1, unit="ns")
 
 def spi_expected_status(done: int) -> int:
-    return ((0 if done else 1) << 1) | (1 if done else 0)
+    return 1 if done else 0
 
 async def spi_record_pulse(dut, signal_name: str, stop, sample_name=None):
     sig = getattr(dut, signal_name)
