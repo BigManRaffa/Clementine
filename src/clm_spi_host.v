@@ -78,13 +78,8 @@ module clm_spi_host (
     wire lane2_sel = read_acc & (command_latched[1]) & (~command_latched[0]);
     wire lane3_sel = read_acc & (command_latched[1]) & (command_latched[0]);
 
-    wire [15:0] status_word;
-    assign status_word[0] = sequencer_done;
-    assign status_word[1] = ~sequencer_done;
-    assign status_word[15:2] = 14'd0;
-
     wire [15:0] response_value;
-    assign response_value = (lane0_accumulator & {16{lane0_sel}}) | (lane1_accumulator & {16{lane1_sel}}) | (lane2_accumulator & {16{lane2_sel}}) | (lane3_accumulator & {16{lane3_sel}}) | (status_word & {16{is_status}});
+    assign response_value = (lane0_accumulator & {16{lane0_sel}}) | (lane1_accumulator & {16{lane1_sel}}) | (lane2_accumulator & {16{lane2_sel}}) | (lane3_accumulator & {16{lane3_sel}}) | {15'd0, (sequencer_done & is_status)};
 
     // one register both directions. no counter: cs frames the
     // transaction and the host owns the clock count.
