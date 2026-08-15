@@ -54,17 +54,13 @@ module clm_spi_host (
     wire cs_active = ~cs_n_sync[1];
     wire cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
     wire cs_rising = cs_n_sync[1] & (~cs_n_sync[2]);
+    wire sclk_falling = (~sclk_sync[1]) & sclk_sync[2];
 
     reg [2:0] command_latched;
 
     // tracks the pins while cs is idle, freezes the moment cs goes active
     always @(posedge clk) begin
-        if (!rst_n) begin
-            command_latched <= 3'b000;
-        end
-        else if (~cs_active) begin
-            command_latched <= command;
-        end
+        if (~cs_active) command_latched <= command;
     end
 
     wire read_acc = command_latched[2];
@@ -95,7 +91,8 @@ module clm_spi_host (
     // transaction and the host owns the clock count.
     reg [15:0] data_register;
 
-    assign spi_miso = data_register[15];
+    reg miso_out;
+    assign spi_miso = miso_out;
     assign instruction_data = data_register;
 
     always @(posedge clk) begin
@@ -104,6 +101,18 @@ module clm_spi_host (
         end
         else if (cs_active & sclk_rising & (~is_buffer)) begin
             data_register <= {data_register[14:0], mosi_sync[1]};
+        end
+    end
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            miso_out <= 1'b0;
+        end
+        else if (cs_falling) begin
+            miso_out <= response_value[15];
+        end
+        else if (cs_active & sclk_falling) begin
+            miso_out <= data_register[15];
         end
     end
 

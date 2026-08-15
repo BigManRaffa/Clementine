@@ -50,17 +50,17 @@ module fpga_top (
         .uio_oe (core_uio_oe)
     );
 
-    reg [3:0] go_count;
+    reg [3:0] commit_count;
     always @(posedge clk) begin
         if (!core_rst_n) begin
-            go_count <= 4'd0;
+            commit_count <= 4'd0;
         end
-        else if (core_uo_out[5]) begin
-            go_count <= go_count + 4'd1;
+        else if (core_uo_out[2]) begin
+            commit_count <= commit_count + 4'd1;
         end
     end
 
-    assign led = ~go_count;
+    assign led = ~commit_count;
 
 endmodule
 `default_nettype wire
