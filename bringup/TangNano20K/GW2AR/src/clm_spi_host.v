@@ -103,7 +103,7 @@ module clm_spi_host (
         if (cs_falling) begin
             data_register <= response_value;
         end
-        else if (cs_active & sclk_rising) begin
+        else if (cs_active & sclk_rising & (~is_buffer)) begin
             data_register <= {data_register[14:0], mosi_sync[1]};
         end
     end
