@@ -54,6 +54,7 @@ module clm_spi_host (
     wire cs_active = ~cs_n_sync[1];
     wire cs_falling = (~cs_n_sync[1]) & cs_n_sync[2];
     wire cs_rising = cs_n_sync[1] & (~cs_n_sync[2]);
+    wire sclk_falling = (~sclk_sync[1]) & sclk_sync[2];
 
     reg [2:0] command_latched;
 
@@ -83,17 +84,27 @@ module clm_spi_host (
 
     // one register both directions. no counter: cs frames the
     // transaction and the host owns the clock count.
-    reg [16:0] data_register;
+    reg [15:0] data_register;
 
-    assign spi_miso = data_register[16];
-    assign instruction_data = data_register[15:0];
+    reg miso_out;
+    assign spi_miso = miso_out;
+    assign instruction_data = data_register;
 
     always @(posedge clk) begin
-    if (cs_falling) begin
-            data_register <= {1'b0, response_value};
+        if (cs_falling) begin
+            miso_out <= response_value[15];
         end
-        else if (cs_active & sclk_rising & (~is_buffer)) begin
-            data_register <= {data_register[15:0], mosi_sync[1]};
+        else if (sclk_falling) begin
+            miso_out <= data_register[15];
+        end
+    end
+
+    always @(posedge clk) begin
+        if (cs_falling) begin
+            data_register <= response_value;
+        end
+        else if (cs_active & sclk_rising) begin
+            data_register <= {data_register[14:0], mosi_sync[1]};
         end
     end
 
