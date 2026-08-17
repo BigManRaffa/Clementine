@@ -1,0 +1,2 @@
+LDI R5, 0x2A
+HALT
