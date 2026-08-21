@@ -1,6 +1,7 @@
 .DS_Store
 .idea
 *.vcd
+*.vvp
 *.fst
 *.fst.hier
 runs
@@ -13,3 +14,9 @@ test/results.xml
 test/gate_level_netlist.v
 desktop.ini
 bringup/TangNano20K/GW2AR/impl/
+*.wad
+*.WAD
+e1m1_ssec.h
+wadgfx.h
+trig_q7.h
+__pycache__

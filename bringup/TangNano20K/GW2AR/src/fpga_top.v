@@ -30,9 +30,15 @@ module fpga_top (
 
     assign miso = core_uio_out[2];
 
+    wire core_clk;
+    Gowin_rPLL pll_inst (
+        .clkout (core_clk),
+        .clkin  (clk)
+    );
+
     reg [3:0] por_shift;
 
-    always @(posedge clk) begin
+    always @(posedge core_clk) begin
         por_shift <= {por_shift[2:0], 1'b1};
     end
 
@@ -40,7 +46,7 @@ module fpga_top (
     assign core_rst_n = por_shift[3] & ~rst_n;
 
     tt_um_bigmanraffa_clm tt_dut (
-        .clk (clk),
+        .clk (core_clk),
         .rst_n (core_rst_n),
         .ena (1'b1),
         .ui_in (core_ui_in),
@@ -50,17 +56,7 @@ module fpga_top (
         .uio_oe (core_uio_oe)
     );
 
-    reg [3:0] commit_count;
-    always @(posedge clk) begin
-        if (!core_rst_n) begin
-            commit_count <= 4'd0;
-        end
-        else if (core_uo_out[2]) begin
-            commit_count <= commit_count + 4'd1;
-        end
-    end
-
-    assign led = ~commit_count;
+    assign led = ~core_uo_out[3:0];
 
 endmodule
 `default_nettype wire

@@ -1,0 +1,9 @@
+.host -9, -9, -9, -9
+CLRACC
+MOV_HOST R1
+LDI R2, 1
+MAC R1, R2
+LDI R3, -23
+LDI R4, -3
+MAC R3, R4
+HALT

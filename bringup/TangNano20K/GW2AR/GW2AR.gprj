@@ -16,6 +16,7 @@
         <File path="src/clm_regfile.v" type="file.verilog" enable="1"/>
         <File path="src/clm_spi_host.v" type="file.verilog" enable="1"/>
         <File path="src/fpga_top.v" type="file.verilog" enable="1"/>
+        <File path="src/gowin_rpll/gowin_rpll.v" type="file.verilog" enable="1"/>
         <File path="src/tt_um_bigmanraffa_clm.v" type="file.verilog" enable="1"/>
         <File path="src/clementine.cst" type="file.cst" enable="1"/>
         <File path="src/clementine.sdc" type="file.sdc" enable="1"/>
