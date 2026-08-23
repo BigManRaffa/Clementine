@@ -48,5 +48,5 @@ python3 walk.py
 WASD to move, `q` to quit. If you are using WSL, you may need to attach the port first by using usbipd:
 
 ```powershell
-usbipd list # find your ESP32's BUSID
+usbipd list # find your MCU's BUSID
 usbipd attach --wsl --busid <your-esp32-busid>

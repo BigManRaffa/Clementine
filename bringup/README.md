@@ -1,7 +1,7 @@
 # Clementine Pre-Silicon Validation
 
 - ALU, decoder, lanes, fetch sequencer, register file, SPI slave, multiplier, and mask stack end-to-end validated using a ESP32-S3 Devboard and a Gowin GW2AR FPGA (Sipeed Tang Nano 20K GW2AR-LV18QN88C8/I7).
-- Inside [the host folder](bringup/host), a custom combined assembler + loader and a 19-kernel test suite were used to validate the entire ISA, grouped into per-lane identity, datapath, divergence, reverse-highway forms, and edge case tests.
+- Inside [the host folder](bringup/host), a custom combined assembler + loader and a 39-kernel test suite were used to validate the entire ISA, grouped into per-lane identity, datapath, divergence, reverse-highway forms, and edge case tests.
 
 ## Validation Setup Diagrams
 
