@@ -33,9 +33,9 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
+  ui[0]: "CMD0 (SPI command bit 0)"
+  ui[1]: "CMD1 (SPI command bit 1)"
+  ui[2]: "CMD2 (SPI command bit 2)"
   ui[3]: ""
   ui[4]: ""
   ui[5]: ""

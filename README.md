@@ -15,6 +15,7 @@ https://github.com/user-attachments/assets/2a935765-3c63-42a5-b818-157d14847543
   - [Assembler + Loader](bringup/host/README.md)
   - [DOOM Setup](bringup/demo/doom/README.md)
 - **Design Docs:**
+  - [Documentation](docs/info.md)
 - **Pre-Silicon Validation/Bringup:**
   - [Bringup and Validation](bringup/README.md)
 
@@ -76,7 +77,39 @@ SUBREV, CMPREV, SHLREV, SHRREV are internal reversed-highway routing forms of SU
 Depth-2 mask stack. IFP narrows the mask to true lanes, ELSE reconstructs the parent and pushes RECONVERGE with the ENDIF address. ENDIF is an assembler-resolved address, not an opcode; reconvergence fires when logical_pc equals the top RECONVERGE token's target. MOV_HOST obeys the active mask (a masked-off lane is not written).
 
 ## Architecture Diagram
+![clementine arch](docs/clementine_arch.png)
+You may need to zoom in, I drew this on my tablet (I dont like diagram software)
+## Project Structure
 
-## Repo Structure
+- `src/`: Verilog design files
+  - `tt_um_bigmanraffa_clm.v`: Tiny Tapeout top level wrapper, SPI command decode, four lane instances, and per-lane accumulator readback
+  - `clm_lane.v`: One SIMT lane, wiring the register file, ALU, and multiplier into a single datapath
+  - `clm_fetch_seq.v`: 8-slot stored-program buffer, program counter, bank-conflict replay, and halt reporting
+  - `clm_decoder.v`: Two-layer opcode grid, one control wire hot per cycle
+  - `clm_regfile.v`: 8 registers split into even/odd banks by address parity, two 4:1 read muxes instead of two 8:1, R0 grounded and reused for LANEID
+  - `clm_alu.v`: Adder, shifter, and logic ops, including the reversed-highway routing forms (SUBREV, SHLREV, CMPREV)
+  - `clm_mult_bw.v`: Signed 8x8 Baugh-Wooley multiplier, Dadda compressor tree into a ripple-carry adder
+  - `clm_fa.v`, `clm_ha.v`: Full and half adder primitives used by the compressor tree
+  - `clm_mask_stack.v`: Depth-2 divergence mask stack with automatic reconvergence
+  - `clm_spi_host.v`: SPI slave (Mode 0), command held on sideband pins, CS-delimited transactions
+  - `config.json`: Tiny Tapeout hardening configuration
+- `test/`: Cocotb testbenches
+  - `test.py`: 39 cocotb tests, 247 assertions. 29 unit tests drive the real module hierarchy (decoder, lane, fetch sequencer, SPI slave) against architectural golden models, and 10 full-chip tests cover the ISA end to end, SIMT divergence and reconvergence, bank-conflict replay, MOV_HOST staging, SPI framing, and accumulator readback. The hierarchy tests report SKIP under `GATES=yes`, since synthesized gate-level netlists are flattened
+  - `tb.v`: Tiny Tapeout cocotb wrapper, instantiates the DUT and dumps waveforms
+  - `individual/tb_mult_bw.v`: Exhaustive multiplier bench, all 65,536 signed input pairs, zero mismatches
+  - `individual/fpga_bringup_tb.v`: FPGA bring-up bench, PLL lock and frequency, SPI timing from 1 to 5 MHz, and end-to-end kernel execution
+- `docs/`: Project documentation
+  - `info.md`: Module datasheet, the multiplier and register file designs in detail
+  - Diagrams, waveform captures, and hardware photos referenced by the READMEs
+- `bringup/`: Pre-silicon validation on a Gowin GW2AR FPGA and an ESP32-S3
+  - `README.md`: Validation methodology, breadboard wiring, and the SPI congestion bug writeup
+  - `TangNano20K/`: Gowin project, FPGA top-level wrapper, pin/timing constraints, and PLL IP
+  - `host/`: Combined assembler + loader (`assembler.c`) and the 39-kernel ISA test suite in `kernels/`, with expected per-lane results
+  - `esp32/UART-to-SPI/`: Bridge firmware, unwraps each UART packet onto Clementine's command pins and SPI bus
+  - `demo/doom/`: WAD parsers that bake E1M1 geometry, sector heights, a Q0.7 sine table, and HUD graphics into C headers, plus `walk.py`
+  - `demo/doom_driver/`: Walks the BSP tree, feeds wall geometry to Clementine, and blits the returned rows to the panel
+  - `demo/lcd_test/`: ST7789 panel bring-up sketch
 
-## GDS 2D Preview 
+## GDS 2D Preview
+
+![Clementine GDS 2D preview](docs/gds_preview.png) 
