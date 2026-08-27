@@ -1,9 +1,9 @@
 # Tiny Tapeout project information
 project:
-  title:        "Clementine"      # Project title
+  title:        "Clementine: 4-lane int8 SIMT GPU"      # Project title
   author:       "Rafeed Khan"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "4-lane int8 SIMT GPU"      # One line description of what your project does
+  description:  "SPI Programmable 4-lane int8 SIMT GPU with Hardware Divergence"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
 
