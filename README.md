@@ -2,6 +2,7 @@
 
 https://github.com/user-attachments/assets/2a935765-3c63-42a5-b818-157d14847543
 
+Officially on the [TinyTapeout SKY 26c shuttle](https://app.tinytapeout.com/projects/5644)!
 ## What do you have, Clementine?
 
 - 4 lanes, int8 datapath, 16-bit accumulator per lane
@@ -18,7 +19,8 @@ https://github.com/user-attachments/assets/2a935765-3c63-42a5-b818-157d14847543
   - [Documentation](docs/info.md)
 - **Pre-Silicon Validation/Bringup:**
   - [Bringup and Validation](bringup/README.md)
-
+- **Yosys/OpenLane vs Genus/Innovus**
+  - [OpenSource vs Cadence Analysis](cadence/README.md)
 
 ## ISA
 
@@ -113,3 +115,6 @@ You may need to zoom in, I drew this on my tablet (I dont like diagram software)
 ## GDS 2D Preview
 
 ![Clementine GDS 2D preview](docs/gds_preview.png) 
+
+## Innovus Postroute Layout
+![Innovus Postroute Layout](docs/innovus_view.png) 
