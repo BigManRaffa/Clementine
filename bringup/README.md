@@ -16,7 +16,7 @@
 
 - The assembler polls until the chip reports it has halted, then requests each lane in turn, shifting that accumulator out on MISO for the ESP32 firmware to return as a UART reply packet.
 
-### DOOM Demo
+### DOOM Desktop Demo
 
 ![doom dataflow image](../docs/doom_dataflow.png)
 
@@ -33,6 +33,10 @@
 ## Validation Setup image
 
 ![bringup image](../docs/bringup.jpg)
+
+## Old Demo
+
+https://github.com/user-attachments/assets/2a935765-3c63-42a5-b818-157d14847543
 
 ## Breadboard Setup
 
@@ -68,6 +72,67 @@ Point-to-point:
 On-board, no wires: clk = Tang pin 4 (27 MHz oscillator, PLL'd to 40.5 MHz), rst_n = pin 88 (button S1), LEDs = pins 15-18.
 
 This setup ALSO works for the assembler + kernel tests aswell.
+
+## Doom Handheld Demo
+
+## Handheld
+
+![handheld data flow](../docs/handheld_dataflow.png)
+
+* Same renderer, retargeted to a 128x160 ST7735 and made self contained. The
+  laptop is gone, so there is no `walk.py`, no UART, and no serial input at
+  all.
+
+* The panel changes are two bytes and a grid. ST7735 wants `0x05` for RGB565
+  where ST7789 wants `0x55`, and inversion off instead of on. Cells drop from
+  8 pixels to 4, so a 32 by 40 grid fills the screen exactly with no
+  letterboxing. The projection scale rises to keep the same field of view now
+  that the screen is half as wide.
+
+* Movement comes off an analog stick on two ADC pins. Every stick rests
+  slightly off centre, so the firmware samples the resting position once at
+  boot rather than assuming the midpoint. Do not touch it while it powers up.
+
+* Each frame averages a burst of samples and runs them through a low pass,
+  because a single ADC read swings tens of counts on a stick that has not
+  moved. These gimbals also put a real signal on the other axis when pushed
+  diagonally, which is enough to make a turn walk you backwards, so the axis
+  you are not pushing has to clear a much higher threshold before it counts.
+
+* The status bar is scaled so its height and width shrink by different amounts,
+  because squeezing 320 pixels of bar into 128 leaves the digits unreadable at
+  a uniform scale.
+
+## Handheld image
+
+![handheld data flow](../docs/handheld_image.jpg)
+
+Yes I used a SPST made for a car as my off switch please dont laugh at me.
+
+### Wiring
+
+Everything from the bench setup is unchanged. Three shared bus nodes, the four
+command pins, and the LCD all wire as before. Two additions:
+
+| Joystick | ESP32-S3 |
+|---|---|
+| GND | GND |
+| +5V | 3V3 |
+| VRX | GPIO7 |
+| VRY | GPIO8 |
+| SW  | GPIO14 |
+
+The joystick's `+5V` pin is really VCC. The module is two potentiometers with
+no regulator, so its output swings to whatever it is fed, and the ADC pins are
+not 5V tolerant.
+
+| Power | Connects to |
+|---|---|
+| TP4056 OUT+ | switch, then ESP32 5V and Tang 5V |
+| TP4056 OUT- | ESP32 GND and Tang GND |
+
+GPIO7 and GPIO8 are on ADC1, which keeps working when WiFi is enabled. ADC2
+does not.
 
 ## Issues found
 

@@ -55,6 +55,51 @@ So, after that, it was still running at 8 FPS, which is expected since the chip 
 
 Geometry went from 19,703 SPI transactions per frame down to 2,584.
 
-## Final Result
+## Trial 4
 
-![Final result](../../../docs/finalresult.jpg)
+![Trial 4](../../../docs/trial4.jpg)
+
+## Trial 4: making it a handheld
+
+* Everything so far ran tethered, with a laptop supplying keystrokes over UART
+  and USB supplying power to both boards. So my main goal was to make it a handheld and remove my laptop entirely!
+
+* First I had to deal with the FPGA. The bitstream had only ever been loaded to SRAM, which is
+  volatile, so the Tang forgot the whole design every time power dropped.
+  Writing it to the board's SPI flash instead means the FPGA configures itself
+  on every power up with nothing attached. Since this FPGA has no flash inside the chip, the bitstream goes into the external flash chip and the operation is called exFlash rather than embFlash in the Gowin Programmer.
+
+* Then the screen. I moved to a 1.8 inch 128x160 ST7735, which needed the
+  color mode byte changed from 0x55 to 0x05, inversion turned off instead of
+  on, and cells dropped from 8 pixels to 4 so a 32 by 40 grid fills the panel
+  exactly. The projection scale went up to hold the same field of view now
+  that the screen is half as wide. It also runs faster, since 128x160 is 2.8x
+  fewer pixels than 240x240 and pixels are over half the frame.
+
+* The status bar was unreadable at first. Squeezing 320 pixels of bar into 128
+  makes the digits about 5 pixels tall, so the fix was scaling its height and
+  width by different fractions, 2/5 across and 5/8 down. The bar ends up
+  stretched vertically, which is period accurate anyway since DOOM ran at
+  320x200 on 4:3 monitors and never had square pixels. However I sacrificed HUD quality which makes me sad.
+
+* Input moved to an analog stick on two ADC pins. Both are on ADC1, because
+  ADC2 stops working the moment WiFi initialises and that is not a landmine
+  worth leaving in a demo.
+
+* The stick drifted badly at first. So I did three things to fix it:
+
+  * Every stick rests slightly off its midpoint, so the firmware samples the resting position once at boot instead of assuming 2048.
+  * A single ADC read swings tens of counts on a stick that has not moved, so each frame averages a burst and runs them through a low pass.
+  * These gimbals put a real signal on the other axis when pushed diagonally, enough that turning also walked me backwards, so the axis you are not pushing has to clear a much higher threshold before it counts as movement.
+
+* Power is an 18650 with a charge and boost module, which holds 5V steady as
+  the cell drains from 4.2 down to 3.0. A bare TP4056 would not have worked
+  here, since it only regulates the current going into the cell and passes the
+  raw cell voltage straight through to whatever is on the other side.
+
+* Then I got an SPST switch from O'Reilly Auto Parts so I could turn it off without pulling out the battery. It sits on the module's 5V output pad and shares that joint with the capacitor leg and the wire feeding the boards.
+
+# Final Result
+
+![final result](../../../docs/finalresult.png)
+
