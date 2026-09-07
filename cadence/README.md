@@ -85,6 +85,10 @@ Combinational logic is exactly 2.00x under Yosys. Flop count identical at 547.
 | Clock skew, setup / hold worst | +0.279 / -0.277 ns | needs `report_clock_timing -type skew` |
 | Unannotated nets | 62 | 0 |
 
+While the -5.533 does seem noticeable, it is the worst of the worst case scenario, a 1 in 10 billion chance.
+
+However if that 1 in 10 billion chance did happen I would drop the TT clock from 40 MHz to 30 using the RP2040 on the demo board with the commander tool, so it is not a silicon bound issue. I am putting this here for for clarification's sake.
+
 ### DRV and signoff
 
 | | OpenROAD | Innovus |
