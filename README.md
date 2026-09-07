@@ -1,6 +1,6 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
 
-https://github.com/user-attachments/assets/2a935765-3c63-42a5-b818-157d14847543
+https://github.com/user-attachments/assets/4e6d0641-86f9-49a1-983f-bc7b20977fa3
 
 Officially on the [TinyTapeout SKY 26c shuttle](https://app.tinytapeout.com/projects/5644)!
 ## What do you have, Clementine?
